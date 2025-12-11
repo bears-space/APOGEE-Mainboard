@@ -7,6 +7,13 @@ else()
     list(APPEND requires esp_wifi esp_eth)
 endif()
 
-idf_component_register(SRCS "main.c"
-                    INCLUDE_DIRS "."
-                    PRIV_REQUIRES ${requires})
+idf_component_register(
+    SRCS
+        "main.c"
+        "ota_http.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        ${requires}
+        app_update
+)

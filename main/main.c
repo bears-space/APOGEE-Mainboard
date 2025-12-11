@@ -24,6 +24,8 @@
 #include "esp_check.h"
 #include <time.h>
 #include <sys/time.h>
+#include "ota_http.h"
+
 #if !CONFIG_IDF_TARGET_LINUX
 #include <esp_wifi.h>
 #include <esp_system.h>
@@ -259,7 +261,7 @@ static const httpd_uri_t hello = {
     .handler   = hello_get_handler,
     /* Let's pass response string in user
      * context to demonstrate it's usage */
-    .user_ctx  = "Hello World!"
+    .user_ctx  = "Hello World! This is the updated OTA version!:)"
 };
 
 /* An HTTP POST handler */
@@ -432,35 +434,34 @@ static httpd_handle_t start_webserver(void)
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 #if CONFIG_IDF_TARGET_LINUX
-    // Setting port as 8001 when building for Linux. Port 80 can be used only by a privileged user in linux.
-    // So when a unprivileged user tries to run the application, it throws bind error and the server is not started.
-    // Port 8001 can be used by an unprivileged user as well. So the application will not throw bind error and the
-    // server will be started.
     config.server_port = 8001;
-#endif // !CONFIG_IDF_TARGET_LINUX
+#endif
     config.lru_purge_enable = true;
 
-    // Start the httpd server
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
     if (httpd_start(&server, &config) == ESP_OK) {
-        // Set URI handlers
         ESP_LOGI(TAG, "Registering URI handlers");
         httpd_register_uri_handler(server, &hello);
         httpd_register_uri_handler(server, &echo);
         httpd_register_uri_handler(server, &ctrl);
         httpd_register_uri_handler(server, &any);
 #if CONFIG_EXAMPLE_ENABLE_SSE_HANDLER
-        httpd_register_uri_handler(server, &sse); // Register SSE handler
+        httpd_register_uri_handler(server, &sse);
 #endif
 #if CONFIG_EXAMPLE_BASIC_AUTH
         httpd_register_basic_auth(server);
 #endif
+
+        // <- HIER OTA-Handler registrieren
+        ota_http_register_handlers(server);
+
         return server;
     }
 
     ESP_LOGI(TAG, "Error starting server!");
     return NULL;
 }
+
 
 #if !CONFIG_IDF_TARGET_LINUX
 static esp_err_t stop_webserver(httpd_handle_t server)
