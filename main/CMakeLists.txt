@@ -12,6 +12,7 @@ idf_component_register(
         "main.c"
         "http_server.c"
         "ota_http.c"
+        "vigilant.c"
     INCLUDE_DIRS
         "."
     REQUIRES
