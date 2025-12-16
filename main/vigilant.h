@@ -12,7 +12,12 @@ typedef enum {
     NW_MODE_APSTA
 } NW_MODE;
 
-esp_err_t vigilant_init(NW_MODE _NETWORK_MODE);
+typedef struct {
+    char unique_component_name[32];
+    NW_MODE network_mode;
+} VigilantConfig; 
+
+esp_err_t vigilant_init(VigilantConfig VgConfig);
 
 #ifdef __cplusplus
 }

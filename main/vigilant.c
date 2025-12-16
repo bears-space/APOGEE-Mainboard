@@ -9,6 +9,7 @@
 #include "esp_event.h"
 #include "esp_wifi.h"
 
+
 #include "http_server.h"
 
 static const char *TAG = "vigilant";
@@ -114,7 +115,7 @@ static esp_err_t wifi_apply_mode(NW_MODE mode,
     return ESP_OK;
 }
 
-esp_err_t vigilant_init(NW_MODE network_mode)
+esp_err_t vigilant_init(VigilantConfig VgConfig)
 {
     ESP_LOGI(TAG, "Init NVS");
     esp_err_t ret = nvs_flash_init();
@@ -137,8 +138,8 @@ esp_err_t vigilant_init(NW_MODE network_mode)
 
     ap_cfg_fixup(&ap_cfg);
 
-    ESP_LOGI(TAG, "Starting WiFi... mode=%d", (int)network_mode);
-    ESP_ERROR_CHECK(wifi_apply_mode(network_mode, &sta_cfg, &ap_cfg));
+    ESP_LOGI(TAG, "Starting WiFi... mode=%d", (int)VgConfig.network_mode);
+    ESP_ERROR_CHECK(wifi_apply_mode(VgConfig.network_mode, &sta_cfg, &ap_cfg));
 
     ESP_LOGI(TAG, "Registering HTTP server event handlers");
     ESP_ERROR_CHECK(http_server_register_event_handlers());
@@ -146,5 +147,7 @@ esp_err_t vigilant_init(NW_MODE network_mode)
     ESP_LOGI(TAG, "Starting HTTP server");
     ESP_ERROR_CHECK(http_server_start());
 
+    ESP_LOGI(TAG, "Vigilant initialized successfully!");
+    ESP_LOGI(TAG, "This node unique name is: %s", VgConfig.unique_component_name);
     return ESP_OK;
 }

@@ -6,8 +6,12 @@ static const char *TAG = "app_main";
 
 void app_main(void)
 {
-    NW_MODE mode = NW_MODE_STA;
-    ESP_ERROR_CHECK(vigilant_init(mode));
+    VigilantConfig VgConfig = {
+        .unique_component_name = "Vigliant ESP Test",
+        .network_mode = NW_MODE_APSTA
+    };
+
+    ESP_ERROR_CHECK(vigilant_init(VgConfig));
 
     while (1) {
         sleep(1);
