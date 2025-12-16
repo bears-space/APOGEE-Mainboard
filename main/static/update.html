@@ -1,143 +1,101 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="de">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OTA Update</title>
-<style>
-    body {
-        background: #f0f2f5;
-        font-family: Arial, sans-serif;
-        display: flex;
-        height: 100vh;
-        margin: 0;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .card {
-        background: #fff;
-        padding: 24px;
-        border-radius: 12px;
-        width: 90%;
-        max-width: 420px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-        text-align: center;
-    }
-
-    h2 {
-        margin-top: 0;
-        font-weight: 600;
-    }
-
-    .file-input {
-        margin: 20px 0;
-    }
-
-    input[type="file"] {
-        display: none;
-    }
-
-    .file-label {
-        display: inline-block;
-        padding: 10px 16px;
-        background: #007bff;
-        color: #fff;
-        border-radius: 8px;
-        cursor: pointer;
-        transition: 0.25s;
-    }
-
-    .file-label:hover {
-        background: #006ae0;
-    }
-
-    #filename {
-        margin-top: 8px;
-        font-size: 14px;
-        color: #444;
-    }
-
-    #updateBtn {
-        margin-top: 18px;
-        padding: 12px 20px;
-        width: 100%;
-        background: #28a745;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        font-size: 16px;
-        cursor: pointer;
-        transition: 0.25s;
-        opacity: 0.5;
-    }
-
-    #updateBtn.enabled {
-        opacity: 1;
-    }
-
-    #progress {
-        margin-top: 15px;
-        font-size: 14px;
-        color: #333;
-        display: none;
-    }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>OTA Update</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; max-width: 720px; }
+    .card { padding: 16px; border: 1px solid #3333; border-radius: 12px; }
+    button { padding: 10px 14px; border-radius: 10px; border: 1px solid #3333; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    progress { width: 100%; height: 18px; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    code { background: #00000010; padding: 2px 6px; border-radius: 6px; }
+    .status { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
 </head>
 <body>
+  <h1>OTA Update</h1>
 
-<div class="card">
-    <h2>Firmware Update</h2>
+  <div class="card">
+    <div class="row">
+      <input id="file" type="file" accept=".bin,application/octet-stream" />
+      <button id="btn">Upload</button>
+    </div>
 
-    <label class="file-label" for="file">Choose File</label>
-    <input id="file" type="file" accept=".bin">
-    <div id="filename"></div>
+    <div style="margin-top:14px">
+      <progress id="prog" value="0" max="100"></progress>
+      <div id="pct">0%</div>
+    </div>
 
-    <button id="updateBtn" disabled>Update</button>
-    <div id="progress">Uploading…</div>
-</div>
+    <div style="margin-top:14px" class="status" id="status">Bereit.</div>
 
-<script>
-const fileInput = document.getElementById("file");
-const updateBtn = document.getElementById("updateBtn");
-const filenameText = document.getElementById("filename");
-const progressText = document.getElementById("progress");
+    <p style="margin-top:14px">
+      Endpoint: <code id="ep">/update</code>
+    </p>
+  </div>
 
-fileInput.onchange = () => {
-    if (fileInput.files.length > 0) {
-        filenameText.textContent = fileInput.files[0].name;
-        updateBtn.disabled = false;
-        updateBtn.classList.add("enabled");
+  <script>
+    const UPDATE_URL = "/update";
+
+    const elFile = document.getElementById("file");
+    const elBtn  = document.getElementById("btn");
+    const elProg = document.getElementById("prog");
+    const elPct  = document.getElementById("pct");
+    const elStat = document.getElementById("status");
+    const elEp   = document.getElementById("ep");
+    elEp.textContent = UPDATE_URL;
+
+    function setStatus(msg) { elStat.textContent = msg; }
+    function setProgress(p) {
+      const v = Math.max(0, Math.min(100, p));
+      elProg.value = v;
+      elPct.textContent = `${v.toFixed(1)}%`;
     }
-};
 
-updateBtn.onclick = async () => {
-    const file = fileInput.files[0];
-    if (!file) return;
+    elBtn.onclick = async () => {
+      const file = elFile.files?.[0];
+      if (!file) {
+        setStatus("Fehler: keine Datei ausgewählt.");
+        return;
+      }
 
-    progressText.style.display = "block";
-    progressText.textContent = "Uploading…";
+      elBtn.disabled = true;
+      setProgress(0);
+      setStatus(`Upload startet...\nDatei: ${file.name} (${file.size} bytes)\nPOST ${UPDATE_URL}`);
 
-    const formData = new FormData();
-    formData.append("update", file);
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", UPDATE_URL, true);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
 
-    try {
-        const res = await fetch("/update", {
-            method: "POST",
-            body: formData
-        });
-
-        if (res.ok) {
-            progressText.textContent = "Update successful! Rebooting…";
-            setTimeout(() => location.reload(), 3000);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          setProgress((e.loaded / e.total) * 100);
         } else {
-            progressText.textContent = "Update failed.";
+          setStatus(`Upload läuft... (bytes: ${e.loaded})`);
         }
-    } catch (err) {
-        progressText.textContent = "Network error.";
-    }
-};
-</script>
+      };
 
+      xhr.onload = () => {
+        const ok = xhr.status >= 200 && xhr.status < 300;
+        setProgress(ok ? 100 : elProg.value);
+
+        setStatus(
+          `Fertig.\nHTTP ${xhr.status}\nResponse:\n${xhr.responseText || "(leer)"}\n\n` +
+          (ok ? "Wenn das Gerät jetzt rebootet: alles gut ✅" : "Das sieht nach Fehler aus ❌")
+        );
+
+        elBtn.disabled = false;
+      };
+
+      xhr.onerror = () => {
+        setStatus("Netzwerkfehler (oder ESP reboot während Response) — kann trotzdem success sein, wenn OTA direkt rebootet.");
+        elBtn.disabled = false;
+      };
+
+      xhr.send(file);
+    };
+  </script>
 </body>
 </html>
