@@ -24,11 +24,7 @@ reliable OTA updates, flexible network modes, and peripheral support.
   - Wireless debugging over the network (e.g. TCP terminal)
   - Centralized logging API for modules
   - Optional verbose / debug builds
-
-- Some kind of recovery system for booting
-
 ## Peripherals
-
 Vigilant Engine includes drivers / integration for:
 
 - **WS2812B** – Addressable RGB LEDs (status indication, effects)
@@ -36,3 +32,6 @@ Vigilant Engine includes drivers / integration for:
 - **TCAN332** – CAN transceiver
 
 These peripherals are wrapped in a common abstraction layer so they can be reused across all Starstreak nodes.
+
+## Partition setup and the Flasher
+Vigilant engine is made from two main partitions, the factory partition, and the ota_0 partition.
