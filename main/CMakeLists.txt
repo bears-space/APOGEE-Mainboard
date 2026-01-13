@@ -13,6 +13,7 @@ idf_component_register(
         "http_server.c"
         "ota_http.c"
         "vigilant.c"
+        "status_led.c"
     INCLUDE_DIRS
         "."
     EMBED_FILES 
@@ -21,4 +22,5 @@ idf_component_register(
         ${requires}
         app_update
         esp_partition
+        led_strip
 )

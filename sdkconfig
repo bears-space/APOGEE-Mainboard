@@ -628,6 +628,13 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Example Configuration
 
 #
+# Vigilant Engine Configuration
+#
+CONFIG_VE_ENABLE_STATUS_LED=y
+CONFIG_VE_STATUS_LED_GPIO=8
+# end of Vigilant Engine Configuration
+
+#
 # Example Connection Configuration
 #
 CONFIG_ENV_GPIO_RANGE_MIN=0

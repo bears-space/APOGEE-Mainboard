@@ -34,3 +34,19 @@ menu "Example Configuration"
             This will allow the server to push real-time updates to the client over an HTTP connection.
 
 endmenu
+
+menu "Vigilant Engine Configuration"
+
+    config VE_ENABLE_STATUS_LED
+        bool "Enable Status LED"
+        default y
+        help
+            Enable this option to use the status LED functionality in Vigilant Engine.
+            The status LED provides visual feedback on the system's status and operations, and can optionally be used for visual output.
+    config VE_STATUS_LED_GPIO
+        int "Status LED GPIO pin"
+        default 8
+        help
+            The GPIO pin number for the status LED.
+        
+endmenu
