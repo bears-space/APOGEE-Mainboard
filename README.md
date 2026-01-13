@@ -35,3 +35,7 @@ These peripherals are wrapped in a common abstraction layer so they can be reuse
 
 ## Partition setup and the Flasher
 Vigilant engine is made from two main partitions, the factory partition, and the ota_0 partition.
+
+## Flashing the ESP32
+To flash the main programm, you first need to flash the recovery partition. This part of the project can be found in the ```/vigilant-engine-recovery``` directory. You can use ESP-IDF's built in ```"Build, Flash and Monitor"``` action to flash to the ESP. After flashing, the ESP will open an AP, with the SSID being ```"VE-Recovery"```, the password is ```"starstreak"```. When you connected successfully, the webserver should be at ```http://192.168.4.1/```. You then have the option to upload a binary, and then the ability to flash. When you have selected a valid .bin file, you can press "Upload" to Flash the ESP. When the ESP accepts the binary file, it will return ```"OTA OK: wrote %d bytes. Rebooting to ota_0…"```
+The ESP will then boot into the ota_0 partition. Vigilant engine has has route built into the webserver called ```/rebootfactory```, which enables you to boot into the recovery app, allowing you to flash new firmware.
