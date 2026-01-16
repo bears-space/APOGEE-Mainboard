@@ -17,7 +17,7 @@ idf_component_register(
     INCLUDE_DIRS
         "."
     EMBED_FILES 
-        "static/update.html"
+        "static/vigilant.html"
     REQUIRES
         ${requires}
         app_update
