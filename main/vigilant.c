@@ -155,7 +155,7 @@ esp_err_t vigilant_init(VigilantConfig VgConfig)
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
-    snprintf((char*)ap_cfg.sta.ssid, sizeof(ap_cfg.sta.ssid), 
+    snprintf((char*)ap_cfg.ap.ssid, sizeof(ap_cfg.ap.ssid), 
              "starstreak-%02X%02X", mac[4], mac[5]);
 
     ESP_LOGI(TAG, "Init netif + event loop");
