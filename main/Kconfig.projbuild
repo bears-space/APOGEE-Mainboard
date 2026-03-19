@@ -43,10 +43,44 @@ menu "Vigilant Engine Configuration"
         help
             Enable this option to use the status LED functionality in Vigilant Engine.
             The status LED provides visual feedback on the system's status and operations, and can optionally be used for visual output.
-    config VE_STATUS_LED_GPIO
-        int "Status LED GPIO pin"
-        default 8
+
+    choice VE_STATUS_LED_MODE
+        prompt "LED Operation Mode"
+        default STATUS_LED_MODE_RGB
         help
-            The GPIO pin number for the status LED.
+            Select how the LED conveys status information.
+
+        config VE_STATUS_LED_MODE_RGB
+            bool "RGB (Color-based)"
+        
+        config VE_STATUS_LED_MODE_BLINK
+            bool "BLINK (Frequency-based)"
+    endchoice
+
+    # --- RGB Mode Settings ---
+    config VE_STATUS_LED_GPIO_RED
+        int "Red LED GPIO"
+        range 0 64
+        default 46
+        depends on VE_STATUS_LED_MODE_RGB
+
+    config VE_STATUS_LED_GPIO_GREEN
+        int "Green LED GPIO"
+        range 0 64
+        default 0
+        depends on STATUS_LED_MODE_RGB
+
+    config VE_STATUS_LED_GPIO_BLUE
+        int "Blue LED GPIO"
+        range 0 64
+        default 45
+        depends on VE_STATUS_LED_MODE_RGB
+
+    # --- BLINK Mode Settings ---
+    config VE_STATUS_LED_GPIO_BLINK
+        int "Blink LED GPIO"
+        range 0 64
+        default 48
+        depends on VE_STATUS_LED_MODE_BLINK
         
 endmenu
