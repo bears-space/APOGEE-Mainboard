@@ -14,12 +14,16 @@ These peripherals are wrapped behind a common abstraction layer to simplify reus
 
 Depending on the mode, the status LED gives information about the status of the device differently.
 
+Supported LEDs: Generic 1-Pin, Generic RGB, WS2812B
+
+For more information about the available settings, see the menuconfig and the [config page](./config.md).
+
 #### RGB-Mode
 - **Green (slow) blinking**: Info, Period is 1s 
 - **Blue (faster) blinking**: Warning, Period is 600ms
 - **Red (fast) blinking**: Error, Period is 300ms
 
-#### Blink-Mode
+#### Blink-Mode (Generic 1-Pin only)
 - **Slow blinking**: Info, Period is 2s
 - **Faster blinking**: Warning, Period is 700ms
 - **Fast blinking**: Error, Period is 100ms
