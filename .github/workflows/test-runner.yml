@@ -5,7 +5,7 @@ on:
 
 jobs:
   test:
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux, x64, docker]
 
     steps:
       - name: Who am I
