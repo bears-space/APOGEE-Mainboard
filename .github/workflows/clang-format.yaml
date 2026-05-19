@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   clang-format:
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: [self-hosted, Linux, X64, docker]
 
     steps:
       - name: Checkout repository
