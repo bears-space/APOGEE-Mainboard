@@ -22,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          [ -s .python-version ] || { echo ".python-version is missing or empty" >&2; exit 1; }
+          [ -s .python-version ] || { echo ".python-version file is missing or empty in the repository root" >&2; exit 1; }
           PYTHON_VERSION="$(cat .python-version)"
           uv python install "${PYTHON_VERSION}"
           uv sync --dev --python "${PYTHON_VERSION}"
