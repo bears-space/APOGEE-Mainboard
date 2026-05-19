@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   ruff:
     runs-on: [self-hosted, linux, x64, docker]
