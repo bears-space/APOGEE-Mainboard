@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   ruff:
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: [self-hosted]
 
     steps:
       - name: Checkout repository
