@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   pre-commit:
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux, x64, docker]
 
     steps:
       - name: Checkout repository
