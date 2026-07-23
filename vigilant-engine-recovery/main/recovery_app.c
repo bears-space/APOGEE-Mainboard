@@ -258,6 +258,19 @@ static void wifi_init_softap(void) {
 }
 
 void app_main(void) {
+    /*
+
+    IMPORTANT:
+    A note to auto booting when we implement boot flags to determine if we are
+    in flight or not, etc.
+
+    We might want to skip the recovery mode if we are in flight or if we have a
+    valid boot flag set. This ensures we dont wait a long time for a device to
+    connect, when we know no device will connect in flight. Furthermore, this
+    allows for quickly recovering the device in flight.
+
+    */
+
     // NVS required for WiFi on many setups
     esp_err_t nvs = nvs_flash_init();
     if (nvs == ESP_ERR_NVS_NO_FREE_PAGES ||
