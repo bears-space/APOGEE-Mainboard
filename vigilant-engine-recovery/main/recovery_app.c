@@ -43,32 +43,34 @@ static const esp_partition_t* find_ota0_partition(void) {
     return p;
 }
 
-static esp_err_t boot_post_handler(httpd_req_t* req) {
+static esp_err_t boot_ota0_partition(void) {
     const esp_partition_t* ota0 = find_ota0_partition();
     if (!ota0) {
         ESP_LOGE(TAG, "ota_0 partition not found");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                            "ota_0 not found");
-        return ESP_FAIL;
+        return ESP_ERR_NOT_FOUND;
     }
 
     esp_err_t err = esp_ota_set_boot_partition(ota0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s",
                  esp_err_to_name(err));
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                            "set_boot_partition failed");
-        return ESP_FAIL;
+        return err;
     }
 
     ESP_LOGI(TAG, "Boot partition set to ota_0. Rebooting…");
-
-    httpd_resp_set_type(req, "text/plain");
-    httpd_resp_sendstr(req, "OK. Rebooting to ota_0...\n");
-
     vTaskDelay(pdMS_TO_TICKS(250));
     esp_restart();
-    return ESP_OK;
+    return ESP_OK;  // should never reach here
+}
+
+static esp_err_t boot_post_handler(httpd_req_t* req) {
+    esp_err_t boot_err = boot_ota0_partition();
+    if (boot_err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Failed to set boot partition");
+        return boot_err;
+    }
+    return ESP_OK;  // should never reach here
 }
 
 static esp_err_t ota_post_handler(httpd_req_t* req) {
@@ -273,8 +275,27 @@ void app_main(void) {
     wifi_init_softap();
     start_http_server();
 
-    // Keep main task alive
-    while (true) {
+    bool device_connected = false;
+    for (size_t i = 0; i < 7 && !device_connected;
+         i++)  // wait 7 seconds for a device to connect to the AP
+    {
+        ESP_LOGI(TAG, "Waiting for device to connect to AP... (%d/7)", i + 1);
         vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    if (device_connected) {
+        ESP_LOGI(TAG, "Device connected to AP");
+        while (1) {
+            vTaskDelay(pdMS_TO_TICKS(1000));  // keep the task alive
+        }
+    }
+
+    // boot into ota_0 if no device connected to the AP after 7 seconds
+    ESP_LOGI(TAG, "No device connected to AP. Booting...");
+    esp_err_t boot_err = boot_ota0_partition();
+    if (boot_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to boot ota_0 partition: %s",
+                 esp_err_to_name(boot_err));
+        abort();
     }
 }
