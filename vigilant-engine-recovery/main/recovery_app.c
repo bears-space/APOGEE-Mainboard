@@ -289,11 +289,30 @@ void app_main(void) {
     start_http_server();
 
     bool device_connected = false;
-    for (size_t i = 0; i < 7 && !device_connected;
-         i++)  // wait 7 seconds for a device to connect to the AP
+    for (size_t i = 0; i < 30 && !device_connected;
+         i++)  // wait 30 seconds for a device to connect to the AP
     {
-        ESP_LOGI(TAG, "Waiting for device to connect to AP... (%d/7)", i + 1);
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "Waiting for device to connect to AP... (%d/30)", i + 1);
+
+        // check if a device is connected to the AP
+        wifi_sta_list_t sta_list;
+        ESP_ERROR_CHECK(esp_wifi_ap_get_sta_list(&sta_list));
+        if (sta_list.num > 0) {
+            device_connected = true;
+            ESP_LOGI(TAG, "Device connected to AP: %d device(s)", sta_list.num);
+            for (int j = 0; j < sta_list.num; j++) {
+                char mac_str[18];
+                snprintf(mac_str, sizeof(mac_str),
+                         "%02x:%02x:%02x:%02x:%02x:%02x",
+                         sta_list.sta[j].mac[0], sta_list.sta[j].mac[1],
+                         sta_list.sta[j].mac[2], sta_list.sta[j].mac[3],
+                         sta_list.sta[j].mac[4], sta_list.sta[j].mac[5]);
+
+                ESP_LOGI(TAG, "Connected device MAC: %s", mac_str);
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1000));  // wait 1 second before checking again
     }
 
     if (device_connected) {
@@ -303,7 +322,7 @@ void app_main(void) {
         }
     }
 
-    // boot into ota_0 if no device connected to the AP after 7 seconds
+    // boot into ota_0 if no device connected to the AP after 30 seconds
     ESP_LOGI(TAG, "No device connected to AP. Booting...");
     esp_err_t boot_err = boot_ota0_partition();
     if (boot_err != ESP_OK) {
