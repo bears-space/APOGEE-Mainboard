@@ -167,3 +167,11 @@ menu "Vigilant Engine Configuration: I2C"
         help
             The frequency of the I2C communication in Hertz. Common values are 100000 (100 kHz) for standard mode and 400000 (400 kHz) for fast mode.
 endmenu
+
+menu "Vigilant Engine Configuration: Frontend"
+    config VE_DISABLE_FRONTEND
+        bool "Disable Frontend Embedded HTML"
+        default n
+        help
+            Enable this option to disable the frontend functionality in Vigilant Engine. This is useful for headless operation or when the frontend is not needed. Note: this only removes the html embedded in the firmware, the api routes are still available.
+endmenu
