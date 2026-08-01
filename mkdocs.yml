@@ -8,6 +8,7 @@ nav:
   - Build & Flash: build-flash.md
   - Project Layout: project-layout.md
   - Firmware Features: features.md
+  - Telemetry Pipeline: telemetry-pipeline.md
   - Configuration: config.md
   - Recovery & OTA: recovery-ota.md
   - Peripherals: peripherals.md
@@ -21,5 +22,9 @@ markdown_extensions:
   - admonition
   - toc:
       permalink: true
+
+plugins:
+  - search
+  - mermaid2
 
 theme: readthedocs
