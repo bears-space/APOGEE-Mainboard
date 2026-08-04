@@ -6,7 +6,7 @@ Vigilant Engine includes drivers and integration for common peripherals used acr
 
 - **WS2812B**: Addressable RGB LEDs (status indication, effects)
 - **TCAN4550-Q1**: SPI CAN/CAN-FD controller and transceiver
-- **TCAN332**: CAN transceiver **(NOT IMPLEMENTED!)**
+- **TCAN337**: Classic CAN transceiver using the ESP32-S3 TWAI controller
 
 These peripherals are wrapped behind a common abstraction layer to simplify reuse across multiple firmware targets.
 
@@ -70,6 +70,41 @@ identifier type, CAN/CAN-FD format, BRS/RTR/ESI flags, length, timestamp,
 filter information, and the complete payload. `FIFO_LOSS` in a frame log means
 the serial logger could not drain the receive FIFO quickly enough and one or
 more frames were lost.
+
+## TCAN337 Classic CAN verification
+
+The TCAN337 is a physical-layer transceiver; the ESP32-S3 TWAI peripheral is
+the Classic CAN protocol controller. The application uses this connection:
+
+| Signal | ESP32-S3 GPIO |
+| --- | ---: |
+| RXD / CAN_RX | 15 |
+| TXD / CAN_TX | 16 |
+
+Set `TCAN337_BEACON_ADDRESS` in `main/main.c` to change the boot-test CAN ID,
+and set `TCAN337_BITRATE` to the bus arbitration rate. The non-G TCAN337 is
+limited to 1 Mbit/s. Standard and extended Classic CAN frames are accepted and
+logged with their ID, RTR flag, length, timestamp, and complete payload.
+
+At boot, the ESP32 controller enters self-test and self-reception mode, sends an
+eight-byte beacon without requiring another node to acknowledge it, and checks
+the received copy. It then recreates the controller in normal CAN mode and
+waits for external frames using an interrupt-driven receive queue. Controller
+error state, TEC/REC, bus errors, queue loss, and transmit failures are logged;
+bus-off recovery starts automatically.
+
+The module must hold TCAN337 pin 8 (`S`) low for normal mode. If it is connected
+to the ESP32, assign `TCAN337_SILENT_IO` instead of `GPIO_NUM_NC`. TCAN337 pin 5
+(`FAULT`) is also supported optionally through `TCAN337_FAULT_IO`; its
+open-drain output requires the external pull resistor specified by TI. With
+only RXD and TXD connected, transceiver-specific undervoltage, thermal, and
+dominant-timeout faults cannot be read directly, but CAN controller errors are
+still reported.
+
+As with every high-speed CAN network, use correct CANH/CANL termination. The
+self-test verifies controller operation and self-reception, while a second node
+or oscilloscope is still required to validate interoperability and physical bus
+levels.
 
 ### Status LED
 
