@@ -43,6 +43,16 @@ typedef struct {
 static const char* TAG = "tcan337";
 static tcan337_context_t s_tcan337;
 
+static void reset_runtime_statistics(void) {
+    atomic_store_explicit(&s_tcan337.received_frames, 0, memory_order_relaxed);
+    atomic_store_explicit(&s_tcan337.dropped_frames, 0, memory_order_relaxed);
+    atomic_store_explicit(&s_tcan337.transmitted_frames, 0,
+                          memory_order_relaxed);
+    atomic_store_explicit(&s_tcan337.failed_transmissions, 0,
+                          memory_order_relaxed);
+    atomic_store_explicit(&s_tcan337.last_error_flags, 0, memory_order_relaxed);
+}
+
 static bool gpio_is_optional_input(gpio_num_t gpio) {
     return gpio == GPIO_NUM_NC || GPIO_IS_VALID_GPIO(gpio);
 }
@@ -392,6 +402,10 @@ esp_err_t tcan337_start(bool listen_only) {
     if (err == ESP_OK) {
         xQueueReset(s_tcan337.rx_queue);
         err = create_node(false, false, listen_only);
+    }
+    if (err == ESP_OK) {
+        /* Do not include boot self-test traffic in normal-mode diagnostics. */
+        reset_runtime_statistics();
     }
     if (err == ESP_OK) {
         err = twai_node_enable(s_tcan337.node);

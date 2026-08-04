@@ -91,7 +91,9 @@ eight-byte beacon without requiring another node to acknowledge it, and checks
 the received copy. It then recreates the controller in normal CAN mode and
 waits for external frames using an interrupt-driven receive queue. Controller
 error state, TEC/REC, bus errors, queue loss, and transmit failures are logged;
-bus-off recovery starts automatically.
+bus-off recovery starts automatically. Error flags are decoded by name, and a
+persistent error is rate-limited to one health report every ten seconds while
+its counters continue to accumulate.
 
 The module must hold TCAN337 pin 8 (`S`) low for normal mode. If it is connected
 to the ESP32, assign `TCAN337_SILENT_IO` instead of `GPIO_NUM_NC`. TCAN337 pin 5
@@ -105,6 +107,13 @@ As with every high-speed CAN network, use correct CANH/CANL termination. The
 self-test verifies controller operation and self-reception, while a second node
 or oscilloscope is still required to validate interoperability and physical bus
 levels.
+
+A repeated `stuff` error with TEC at zero and an increasing REC means RXD is
+seeing malformed activity from the physical bus; it is not a failed loopback
+test. On an unconnected bench setup, check that `S` is low, TCAN337 and ESP32
+grounds are common, the transceiver supply is valid, and CANH/CANL are
+terminated. With the system powered down, a normal bus with one 120-ohm
+terminator at each end measures about 60 ohms between CANH and CANL.
 
 ### Status LED
 

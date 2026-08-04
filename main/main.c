@@ -35,6 +35,7 @@
 #define TCAN4550_NOMINAL_BITRATE 500000U
 #define TCAN4550_DATA_BITRATE 2000000U
 #define TCAN337_BITRATE 500000U
+#define TCAN337_HEALTH_REPORT_INTERVAL_MS 10000U
 
 /* External loopback exercises the transceiver and CANH/CANL path. */
 #define TCAN4550_RUN_EXTERNAL_LOOPBACK_TEST 1
@@ -59,6 +60,53 @@ static const char* tcan337_bus_state_name(tcan337_bus_state_t state) {
         case TCAN337_ERROR_ACTIVE:
         default:
             return "active";
+    }
+}
+
+static void format_tcan337_errors(uint32_t flags, char* output,
+                                  size_t output_size) {
+    static const struct {
+        uint32_t flag;
+        const char* name;
+    } error_names[] = {
+        {TCAN337_ERROR_ARBITRATION_LOST, "arbitration-lost"},
+        {TCAN337_ERROR_BIT, "bit"},
+        {TCAN337_ERROR_FORM, "form"},
+        {TCAN337_ERROR_STUFF, "stuff"},
+        {TCAN337_ERROR_ACK, "ack"},
+    };
+
+    if (output_size == 0) {
+        return;
+    }
+    if (flags == 0) {
+        (void)snprintf(output, output_size, "none");
+        return;
+    }
+
+    size_t offset = 0;
+    uint32_t recognized = 0;
+    for (size_t index = 0; index < sizeof(error_names) / sizeof(error_names[0]);
+         ++index) {
+        if ((flags & error_names[index].flag) == 0) {
+            continue;
+        }
+        recognized |= error_names[index].flag;
+        const int written =
+            snprintf(&output[offset], output_size - offset, "%s%s",
+                     offset == 0 ? "" : "|", error_names[index].name);
+        if (written < 0 || (size_t)written >= output_size - offset) {
+            output[output_size - 1] = '\0';
+            return;
+        }
+        offset += (size_t)written;
+    }
+
+    const uint32_t unknown = flags & ~recognized;
+    if (unknown != 0 && offset < output_size) {
+        (void)snprintf(&output[offset], output_size - offset,
+                       "%sunknown-0x%02" PRIX32, offset == 0 ? "" : "|",
+                       unknown);
     }
 }
 
@@ -87,7 +135,13 @@ static void log_tcan337_health(void) {
     static uint32_t previous_bus_errors = 0;
     static uint32_t previous_dropped_frames = 0;
     static uint32_t previous_failed_transmissions = 0;
+    static tcan337_bus_state_t previous_state = TCAN337_ERROR_ACTIVE;
+    static bool previous_transceiver_fault = false;
+    static bool diagnostics_initialized = false;
+    static bool controller_issue_reported = false;
+    static bool malformed_bus_explained = false;
     static bool recovery_requested = false;
+    static TickType_t last_report_tick = 0;
 
     tcan337_diagnostics_t diagnostics = {0};
     esp_err_t err = tcan337_get_diagnostics(&diagnostics);
@@ -97,24 +151,62 @@ static void log_tcan337_health(void) {
         return;
     }
 
-    const bool new_fault =
-        diagnostics.last_error_flags != 0 ||
-        diagnostics.bus_error_count != previous_bus_errors ||
-        diagnostics.dropped_frames != previous_dropped_frames ||
+    const bool bus_error_increased =
+        diagnostics.bus_error_count != previous_bus_errors;
+    const bool controller_issue =
+        diagnostics.last_error_flags != 0 || bus_error_increased;
+    const bool state_changed =
+        diagnostics_initialized && diagnostics.state != previous_state;
+    const bool transceiver_fault_changed =
+        diagnostics_initialized &&
+        diagnostics.transceiver_fault != previous_transceiver_fault;
+    const bool dropped_frames_changed =
+        diagnostics.dropped_frames != previous_dropped_frames;
+    const bool failed_transmissions_changed =
         diagnostics.failed_transmissions != previous_failed_transmissions;
-    if (diagnostics.state != TCAN337_ERROR_ACTIVE || new_fault ||
-        diagnostics.transceiver_fault) {
+    const bool first_controller_issue =
+        controller_issue && !controller_issue_reported;
+    const bool first_transceiver_fault =
+        diagnostics.transceiver_fault && !diagnostics_initialized;
+    const bool persistent_issue = controller_issue ||
+                                  diagnostics.state != TCAN337_ERROR_ACTIVE ||
+                                  diagnostics.transceiver_fault;
+    const TickType_t now = xTaskGetTickCount();
+    const bool periodic_report_due =
+        persistent_issue &&
+        now - last_report_tick >=
+            pdMS_TO_TICKS(TCAN337_HEALTH_REPORT_INTERVAL_MS);
+    const bool report = first_controller_issue || first_transceiver_fault ||
+                        state_changed || transceiver_fault_changed ||
+                        dropped_frames_changed ||
+                        failed_transmissions_changed || periodic_report_due;
+
+    if (report) {
+        char error_names[64] = {0};
+        format_tcan337_errors(diagnostics.last_error_flags, error_names,
+                              sizeof(error_names));
         ESP_LOGW("can_health",
                  "TCAN337 state=%s TEC=%u REC=%u bus_err=%" PRIu32
-                 " error=0x%02" PRIX32 " rx=%" PRIu32 " dropped=%" PRIu32
+                 " error=0x%02" PRIX32 " (%s) rx=%" PRIu32 " dropped=%" PRIu32
                  " tx=%" PRIu32 " tx_failed=%" PRIu32 "%s",
                  tcan337_bus_state_name(diagnostics.state),
                  diagnostics.tx_error_count, diagnostics.rx_error_count,
                  diagnostics.bus_error_count, diagnostics.last_error_flags,
-                 diagnostics.received_frames, diagnostics.dropped_frames,
-                 diagnostics.transmitted_frames,
+                 error_names, diagnostics.received_frames,
+                 diagnostics.dropped_frames, diagnostics.transmitted_frames,
                  diagnostics.failed_transmissions,
                  diagnostics.transceiver_fault ? " FAULT=ACTIVE" : "");
+        last_report_tick = now;
+    }
+
+    if (!malformed_bus_explained &&
+        (diagnostics.last_error_flags &
+         (TCAN337_ERROR_BIT | TCAN337_ERROR_FORM | TCAN337_ERROR_STUFF)) != 0) {
+        ESP_LOGW("can_health",
+                 "TCAN337 RXD is seeing malformed CAN bits. With no peer, "
+                 "check CANH/CANL termination, common ground, transceiver "
+                 "power, and that S is held low.");
+        malformed_bus_explained = true;
     }
 
     if (diagnostics.state == TCAN337_BUS_OFF && !recovery_requested) {
@@ -133,6 +225,10 @@ static void log_tcan337_health(void) {
     previous_bus_errors = diagnostics.bus_error_count;
     previous_dropped_frames = diagnostics.dropped_frames;
     previous_failed_transmissions = diagnostics.failed_transmissions;
+    previous_state = diagnostics.state;
+    previous_transceiver_fault = diagnostics.transceiver_fault;
+    diagnostics_initialized = true;
+    controller_issue_reported |= controller_issue;
 }
 
 static void tcan337_logger_task(void* argument) {
