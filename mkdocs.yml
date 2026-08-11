@@ -27,4 +27,13 @@ plugins:
   - search
   - mermaid2
 
-theme: readthedocs
+hooks:
+  - docs/mkdocs_hooks.py
+
+watch:
+  - docs/mkdocs_hooks.py
+  - docs/overrides/
+
+theme:
+  name: readthedocs
+  custom_dir: docs/overrides
