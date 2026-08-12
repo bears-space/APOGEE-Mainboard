@@ -225,8 +225,7 @@ esp_err_t i2c_write_regs(VigilantI2CDevice* device, uint8_t reg,
         return ESP_ERR_INVALID_ARG;
     }
     if (!data && len > 0) {
-        ESP_LOGE(TAG, "Cannot write register 0x%02X: data buffer is NULL",
-                 reg);
+        ESP_LOGE(TAG, "Cannot write register 0x%02X: data buffer is NULL", reg);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -237,8 +236,7 @@ esp_err_t i2c_write_regs(VigilantI2CDevice* device, uint8_t reg,
     size_t buffer_count = (len > 0) ? 2 : 1;
 
     return i2c_master_multi_buffer_transmit(device->handle, buffers,
-                                            buffer_count,
-                                            I2C_TIMEOUT_MS);
+                                            buffer_count, I2C_TIMEOUT_MS);
 }
 
 esp_err_t i2c_set_reg8(VigilantI2CDevice* device, uint8_t reg, uint8_t value) {
