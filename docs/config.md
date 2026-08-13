@@ -104,3 +104,7 @@ The password for the WiFi Access Point (AP) mode of the Vigilant Engine.
 
 **default**: `"starstreak"`
 ___
+## Vigilant Engine Settings
+___
+#### `VE_DISABLE_FRONTEND`, **bool**
+Option to disable the frontend embed for the main app, to save flash space. API routes will still be accessible.
