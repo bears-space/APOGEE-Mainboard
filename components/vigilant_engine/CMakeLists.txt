@@ -36,7 +36,7 @@ if(ve_disable_frontend)
     get_filename_component(disabled_frontend_html_dir "${disabled_frontend_html}" DIRECTORY)
     file(MAKE_DIRECTORY "${disabled_frontend_html_dir}")
     file(WRITE "${disabled_frontend_html}"
-        "Frontend embed disabled in Kconfig. You can still access the device function throught the api though."
+        "Frontend embed disabled in Kconfig. You can still access the device function through the api though."
     )
     set(vigilant_html "${disabled_frontend_html}")
     message(STATUS "Embedding disabled frontend placeholder at ${vigilant_html}")
