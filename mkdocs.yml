@@ -1,6 +1,8 @@
 site_name: Vigilant Engine Documentation
 site_description: Documentation for the Vigilant Engine ESP-IDF framework
 site_dir: site
+repo_name: GitHub
+repo_url: https://github.com/bears-space/vigilant-engine
 
 nav:
   - Home: index.md
