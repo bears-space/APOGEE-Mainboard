@@ -72,6 +72,8 @@ menu "Vigilant Engine Configuration: LEDs"
 endmenu
 
 menu "Vigilant Engine Configuration: WiFi"
+    depends on SOC_WIFI_SUPPORTED
+
     # --- Wifi Settings ---
     config VE_STA_SSID
         string "WiFi STA SSID"

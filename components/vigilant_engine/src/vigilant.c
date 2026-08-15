@@ -21,9 +21,23 @@
 #include "status_led.h"
 #include "websocket.h"
 
-#if defined(SOC_WIFI_SUPPORTED) && \
-    SOC_WIFI_SUPPORTED  // Check if Wi-Fi is supported on the target SoC
+#if defined(SOC_WIFI_SUPPORTED) && SOC_WIFI_SUPPORTED
 #include "esp_wifi.h"
+#endif
+
+static const char* TAG = "vigilant";
+static VigilantConfig s_cfg = {0};
+
+#if CONFIG_VE_ENABLE_I2C
+static const size_t MAX_I2C_INFO_DEVICES = 8;
+static VigilantI2CDevice s_i2c_devices[8] = {0};
+static size_t s_i2c_device_count = 0;
+#endif
+
+#if defined(SOC_WIFI_SUPPORTED) && SOC_WIFI_SUPPORTED
+static esp_netif_t* s_netif_sta = NULL;
+static esp_netif_t* s_netif_ap = NULL;
+static TimerHandle_t sta_reconnect_timer;
 
 static wifi_config_t sta_cfg = {.sta = {
                                     .ssid = CONFIG_VE_STA_SSID,
@@ -40,6 +54,11 @@ static wifi_config_t ap_cfg = {
            .channel = 1,
            .max_connection = 4,
            .authmode = WIFI_AUTH_WPA2_PSK}};
+
+static void sta_reconnect_callback(TimerHandle_t xTimer) {
+    (void)xTimer;
+    esp_wifi_connect();
+}
 
 static void wifi_evt(void* arg, esp_event_base_t base, int32_t id, void* data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -124,22 +143,6 @@ static void ap_cfg_fixup(wifi_config_t* cfg) {
     }
 }
 
-static void sta_reconnect_callback(TimerHandle_t xTimer) { esp_wifi_connect(); }
-
-#endif
-
-static const char* TAG = "vigilant";
-#if CONFIG_VE_ENABLE_I2C
-static const size_t MAX_I2C_INFO_DEVICES = 8;
-#endif
-
-static esp_netif_t* s_netif_sta = NULL;
-static esp_netif_t* s_netif_ap = NULL;
-static VigilantConfig s_cfg = {0};
-static TimerHandle_t sta_reconnect_timer;
-#if CONFIG_VE_ENABLE_I2C
-static VigilantI2CDevice s_i2c_devices[8] = {0};
-static size_t s_i2c_device_count = 0;
 #endif
 
 #if CONFIG_VE_ENABLE_I2C
@@ -197,12 +200,16 @@ static void remove_registered_i2c_device(const VigilantI2CDevice* device) {
 #endif
 
 void reboot_to_recovery(void) {
+#if defined(SOC_WIFI_SUPPORTED) && SOC_WIFI_SUPPORTED
     const esp_partition_t* factory = esp_partition_find_first(
         ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
     if (!factory) return;
 
     esp_ota_set_boot_partition(factory);
     esp_restart();
+#else
+    ESP_LOGW(TAG, "Recovery mode is unavailable: Wi-Fi is not supported");
+#endif
 }
 
 esp_err_t vigilant_init(VigilantConfig VgConfig) {
@@ -255,6 +262,9 @@ esp_err_t vigilant_init(VigilantConfig VgConfig) {
 
     ESP_LOGI(TAG, "Starting WiFi... mode=%d", (int)VgConfig.network_mode);
     ESP_ERROR_CHECK(wifi_apply_mode(VgConfig.network_mode, &sta_cfg, &ap_cfg));
+#else
+    ESP_LOGI(TAG,
+             "Wi-Fi is not supported on this SoC; skipping initialization");
 #endif
 
     ESP_LOGI(TAG, "Registering HTTP server event handlers");
@@ -306,7 +316,17 @@ esp_err_t vigilant_get_info(VigilantInfo* info) {
     info->network_mode = s_cfg.network_mode;
 
     uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+#if defined(SOC_WIFI_SUPPORTED) && SOC_WIFI_SUPPORTED
+    const esp_mac_type_t mac_type = ESP_MAC_WIFI_STA;
+#else
+    const esp_mac_type_t mac_type = ESP_MAC_BASE;
+#endif
+    esp_err_t mac_err = esp_read_mac(mac, mac_type);
+    if (mac_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read device MAC: %s",
+                 esp_err_to_name(mac_err));
+        return mac_err;
+    }
     snprintf(info->mac, sizeof(info->mac), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
@@ -320,6 +340,7 @@ esp_err_t vigilant_get_info(VigilantInfo* info) {
     strcpy(info->sta_ssid, "N/S");
 #endif
 
+#if defined(SOC_WIFI_SUPPORTED) && SOC_WIFI_SUPPORTED
     esp_netif_ip_info_t ip_sta = {0};
     if (s_netif_sta && esp_netif_get_ip_info(s_netif_sta, &ip_sta) == ESP_OK) {
         inet_ntoa_r(ip_sta.ip, info->ip_sta, sizeof(info->ip_sta));
@@ -333,6 +354,10 @@ esp_err_t vigilant_get_info(VigilantInfo* info) {
     } else {
         strcpy(info->ip_ap, "0.0.0.0");
     }
+#else
+    strcpy(info->ip_sta, "0.0.0.0");
+    strcpy(info->ip_ap, "0.0.0.0");
+#endif
 
     return ESP_OK;
 }
