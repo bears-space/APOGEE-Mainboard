@@ -10,7 +10,6 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_system.h"
-#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h"
 #include "http_server.h"
@@ -18,22 +17,13 @@
 #include "lwip/inet.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
+#include "soc/soc_caps.h"
 #include "status_led.h"
 #include "websocket.h"
 
-static const char* TAG = "vigilant";
-#if CONFIG_VE_ENABLE_I2C
-static const size_t MAX_I2C_INFO_DEVICES = 8;
-#endif
-
-static esp_netif_t* s_netif_sta = NULL;
-static esp_netif_t* s_netif_ap = NULL;
-static VigilantConfig s_cfg = {0};
-static TimerHandle_t sta_reconnect_timer;
-#if CONFIG_VE_ENABLE_I2C
-static VigilantI2CDevice s_i2c_devices[8] = {0};
-static size_t s_i2c_device_count = 0;
-#endif
+#if defined(SOC_WIFI_SUPPORTED) && \
+    SOC_WIFI_SUPPORTED  // Check if Wi-Fi is supported on the target SoC
+#include "esp_wifi.h"
 
 static wifi_config_t sta_cfg = {.sta = {
                                     .ssid = CONFIG_VE_STA_SSID,
@@ -50,78 +40,6 @@ static wifi_config_t ap_cfg = {
            .channel = 1,
            .max_connection = 4,
            .authmode = WIFI_AUTH_WPA2_PSK}};
-
-#if CONFIG_VE_ENABLE_I2C
-static int registered_i2c_device_index(const VigilantI2CDevice* device) {
-    if (!device) {
-        return -1;
-    }
-
-    for (size_t i = 0; i < s_i2c_device_count; ++i) {
-        if (s_i2c_devices[i].address == device->address &&
-            s_i2c_devices[i].whoami_reg == device->whoami_reg &&
-            s_i2c_devices[i].expected_whoami == device->expected_whoami) {
-            return (int)i;
-        }
-    }
-
-    return -1;
-}
-
-static void sync_registered_i2c_device(const VigilantI2CDevice* device) {
-    if (!device) {
-        return;
-    }
-
-    int existing_index = registered_i2c_device_index(device);
-    if (existing_index >= 0) {
-        s_i2c_devices[existing_index] = *device;
-        return;
-    }
-
-    if (s_i2c_device_count >= MAX_I2C_INFO_DEVICES) {
-        ESP_LOGW(TAG,
-                 "I2C device registry full; device 0x%02X will not be exposed "
-                 "via /i2cinfo",
-                 (unsigned int)device->address);
-        return;
-    }
-
-    s_i2c_devices[s_i2c_device_count++] = *device;
-}
-
-static void remove_registered_i2c_device(const VigilantI2CDevice* device) {
-    int existing_index = registered_i2c_device_index(device);
-    if (existing_index < 0) {
-        return;
-    }
-
-    for (size_t i = (size_t)existing_index + 1; i < s_i2c_device_count; ++i) {
-        s_i2c_devices[i - 1] = s_i2c_devices[i];
-    }
-
-    s_i2c_device_count--;
-    memset(&s_i2c_devices[s_i2c_device_count], 0, sizeof(s_i2c_devices[0]));
-}
-#endif
-
-static void ap_cfg_fixup(wifi_config_t* cfg) {
-    // Wenn password leer ist: auth auf OPEN setzen, sonst meckert IDF rum
-    if (cfg->ap.password[0] == '\0') {
-        cfg->ap.authmode = WIFI_AUTH_OPEN;
-    }
-}
-
-void reboot_to_recovery(void) {
-    const esp_partition_t* factory = esp_partition_find_first(
-        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
-    if (!factory) return;
-
-    esp_ota_set_boot_partition(factory);
-    esp_restart();
-}
-
-static void sta_reconnect_callback(TimerHandle_t xTimer) { esp_wifi_connect(); }
 
 static void wifi_evt(void* arg, esp_event_base_t base, int32_t id, void* data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -199,6 +117,94 @@ static esp_err_t wifi_apply_mode(NW_MODE mode, wifi_config_t* sta,
     return ESP_OK;
 }
 
+static void ap_cfg_fixup(wifi_config_t* cfg) {
+    // Wenn password leer ist: auth auf OPEN setzen, sonst meckert IDF rum
+    if (cfg->ap.password[0] == '\0') {
+        cfg->ap.authmode = WIFI_AUTH_OPEN;
+    }
+}
+
+static void sta_reconnect_callback(TimerHandle_t xTimer) { esp_wifi_connect(); }
+
+#endif
+
+static const char* TAG = "vigilant";
+#if CONFIG_VE_ENABLE_I2C
+static const size_t MAX_I2C_INFO_DEVICES = 8;
+#endif
+
+static esp_netif_t* s_netif_sta = NULL;
+static esp_netif_t* s_netif_ap = NULL;
+static VigilantConfig s_cfg = {0};
+static TimerHandle_t sta_reconnect_timer;
+#if CONFIG_VE_ENABLE_I2C
+static VigilantI2CDevice s_i2c_devices[8] = {0};
+static size_t s_i2c_device_count = 0;
+#endif
+
+#if CONFIG_VE_ENABLE_I2C
+static int registered_i2c_device_index(const VigilantI2CDevice* device) {
+    if (!device) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < s_i2c_device_count; ++i) {
+        if (s_i2c_devices[i].address == device->address &&
+            s_i2c_devices[i].whoami_reg == device->whoami_reg &&
+            s_i2c_devices[i].expected_whoami == device->expected_whoami) {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+static void sync_registered_i2c_device(const VigilantI2CDevice* device) {
+    if (!device) {
+        return;
+    }
+
+    int existing_index = registered_i2c_device_index(device);
+    if (existing_index >= 0) {
+        s_i2c_devices[existing_index] = *device;
+        return;
+    }
+
+    if (s_i2c_device_count >= MAX_I2C_INFO_DEVICES) {
+        ESP_LOGW(TAG,
+                 "I2C device registry full; device 0x%02X will not be exposed "
+                 "via /i2cinfo",
+                 (unsigned int)device->address);
+        return;
+    }
+
+    s_i2c_devices[s_i2c_device_count++] = *device;
+}
+
+static void remove_registered_i2c_device(const VigilantI2CDevice* device) {
+    int existing_index = registered_i2c_device_index(device);
+    if (existing_index < 0) {
+        return;
+    }
+
+    for (size_t i = (size_t)existing_index + 1; i < s_i2c_device_count; ++i) {
+        s_i2c_devices[i - 1] = s_i2c_devices[i];
+    }
+
+    s_i2c_device_count--;
+    memset(&s_i2c_devices[s_i2c_device_count], 0, sizeof(s_i2c_devices[0]));
+}
+#endif
+
+void reboot_to_recovery(void) {
+    const esp_partition_t* factory = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+    if (!factory) return;
+
+    esp_ota_set_boot_partition(factory);
+    esp_restart();
+}
+
 esp_err_t vigilant_init(VigilantConfig VgConfig) {
     bool initializedSuccessfully =
         true;  // Assume success until a failure occurs
@@ -223,6 +229,7 @@ esp_err_t vigilant_init(VigilantConfig VgConfig) {
     // Capture ESP-IDF logs early so they can be replayed to websocket clients
     websocket_init_log_capture();
 
+#if defined(SOC_WIFI_SUPPORTED) && SOC_WIFI_SUPPORTED
     // Generate a unique SSID for the AP based on the device's MAC address
     uint8_t mac[6];
     ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA));
@@ -230,6 +237,7 @@ esp_err_t vigilant_init(VigilantConfig VgConfig) {
              CONFIG_VE_AP_SSID_PREFIX, mac[4], mac[5]);
     ESP_LOGI(TAG, "Device MAC: %02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1],
              mac[2], mac[3], mac[4], mac[5]);
+#endif
 
     ESP_LOGI(TAG, "Init netif + event loop");
     ESP_ERROR_CHECK(esp_netif_init());
@@ -239,6 +247,7 @@ esp_err_t vigilant_init(VigilantConfig VgConfig) {
         initializedSuccessfully = false;
     }
 
+#if defined(SOC_WIFI_SUPPORTED) && SOC_WIFI_SUPPORTED
     ESP_LOGI(TAG, "Init WiFi driver");
     ESP_ERROR_CHECK(wifi_init_once());
 
@@ -246,6 +255,7 @@ esp_err_t vigilant_init(VigilantConfig VgConfig) {
 
     ESP_LOGI(TAG, "Starting WiFi... mode=%d", (int)VgConfig.network_mode);
     ESP_ERROR_CHECK(wifi_apply_mode(VgConfig.network_mode, &sta_cfg, &ap_cfg));
+#endif
 
     ESP_LOGI(TAG, "Registering HTTP server event handlers");
     ESP_ERROR_CHECK(http_server_register_event_handlers());
@@ -300,10 +310,15 @@ esp_err_t vigilant_get_info(VigilantInfo* info) {
     snprintf(info->mac, sizeof(info->mac), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
+#if defined(SOC_WIFI_SUPPORTED) && SOC_WIFI_SUPPORTED
     snprintf(info->ap_ssid, sizeof(info->ap_ssid), "%s",
              (const char*)ap_cfg.ap.ssid);
     snprintf(info->sta_ssid, sizeof(info->sta_ssid), "%s",
              (const char*)sta_cfg.sta.ssid);
+#else
+    strcpy(info->ap_ssid, "N/S");  // = not supported
+    strcpy(info->sta_ssid, "N/S");
+#endif
 
     esp_netif_ip_info_t ip_sta = {0};
     if (s_netif_sta && esp_netif_get_ip_info(s_netif_sta, &ip_sta) == ESP_OK) {
