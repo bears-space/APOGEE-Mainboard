@@ -405,6 +405,32 @@ esp_err_t vigilant_i2c_read_reg8(VigilantI2CDevice* device, uint8_t reg,
 #endif
 }
 
+esp_err_t vigilant_i2c_read_regs(VigilantI2CDevice* device, uint8_t reg,
+                                 uint8_t* data, size_t len) {
+#if CONFIG_VE_ENABLE_I2C
+    return i2c_read_regs(device, reg, data, len);
+#else
+    (void)device;
+    (void)reg;
+    (void)data;
+    (void)len;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t vigilant_i2c_write_regs(VigilantI2CDevice* device, uint8_t reg,
+                                  const uint8_t* data, size_t len) {
+#if CONFIG_VE_ENABLE_I2C
+    return i2c_write_regs(device, reg, data, len);
+#else
+    (void)device;
+    (void)reg;
+    (void)data;
+    (void)len;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
 esp_err_t vigilant_i2c_whoami_check(VigilantI2CDevice* device) {
 #if CONFIG_VE_ENABLE_I2C
     return i2c_whoami_check(device);
