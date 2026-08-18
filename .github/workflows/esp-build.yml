@@ -52,7 +52,7 @@ jobs:
     needs: frontend
     strategy:
       matrix:
-        idf_target: [esp32s3, esp32p4]
+        idf_target: [esp32s3, esp32p4, esp32c6]
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request' && github.base_ref == 'main')
