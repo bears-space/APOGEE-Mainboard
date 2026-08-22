@@ -47,6 +47,8 @@ set(VE_RECOVERY_BUILD_DIR "${VE_BUILD_DIR}/recovery")
 set(VE_RECOVERY_BIN "${VE_RECOVERY_BUILD_DIR}/vigilant-engine-recovery.bin")
 set(VE_RECOVERY_SDKCONFIG "${VE_RECOVERY_BUILD_DIR}/sdkconfig")
 set(VE_RECOVERY_PARTITIONS_CSV "${VE_RECOVERY_PROJECT_DIR}/partitions.csv")
+set(VE_RECOVERY_CONFIG_DIR "${VE_BUILD_DIR}/generated/recovery")
+set(VE_RECOVERY_CONFIG_HEADER "${VE_RECOVERY_CONFIG_DIR}/ve_recovery_config.h")
 get_filename_component(VE_PYTHON_BIN_DIR "${VE_PYTHON}" DIRECTORY)
 get_filename_component(VE_PYTHON_ENV_PATH "${VE_PYTHON_BIN_DIR}" DIRECTORY)
 get_filename_component(VE_TOOLCHAIN_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
@@ -103,6 +105,35 @@ esptool_py_flash_target_image(app-flash app "${VE_MAIN_APP_OFFSET}" "${VE_BUILD_
 esptool_py_flash_target_image(flash app "${VE_MAIN_APP_OFFSET}" "${VE_BUILD_DIR}/${VE_PROJECT_BIN}")
 
 if(CONFIG_SOC_WIFI_SUPPORTED)
+add_custom_target(ve_recovery_build ALL
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/partitions.csv"
+            "${VE_RECOVERY_PARTITIONS_CSV}"
+    COMMAND "${CMAKE_COMMAND}" -E env
+            ${VE_RECOVERY_BUILD_ENV}
+            "${CMAKE_COMMAND}"
+            -G "${CMAKE_GENERATOR}"
+            -B "${VE_RECOVERY_BUILD_DIR}"
+            -S "${VE_RECOVERY_PROJECT_DIR}"
+            "-DPYTHON_DEPS_CHECKED=1"
+            "-DPYTHON=${VE_PYTHON}"
+            "-DESP_PLATFORM=1"
+            "-DIDF_TARGET=${VE_IDF_TARGET}"
+            "-DSDKCONFIG=${VE_RECOVERY_SDKCONFIG}"
+            "-DSDKCONFIG_DEFAULTS=${VE_RECOVERY_PROJECT_DIR}/sdkconfig.defaults"
+            "-DVE_BUILD_WEB=${VE_BUILD_WEB}"
+            "-DVE_RECOVERY_HTML=${VE_RECOVERY_HTML}"
+    COMMAND "${CMAKE_COMMAND}" -E env
+            ${VE_RECOVERY_BUILD_ENV}
+            "${CMAKE_COMMAND}" --build "${VE_RECOVERY_BUILD_DIR}"
+    BYPRODUCTS "${VE_RECOVERY_BIN}" "${VE_RECOVERY_PARTITIONS_CSV}"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    USES_TERMINAL
+    VERBATIM
+)
+
+add_dependencies(ve_recovery_build app)
+add_dependencies(flash ve_recovery_build)
     esptool_py_flash_target_image(flash recovery "${VE_RECOVERY_APP_OFFSET}" "${VE_RECOVERY_BIN}" ALWAYS_PLAINTEXT)
 
     add_custom_target(ve_recovery_build ALL
