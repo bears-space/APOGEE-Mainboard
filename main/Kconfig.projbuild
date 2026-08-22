@@ -100,6 +100,8 @@ menu "Vigilant Engine Configuration: WiFi"
             The password for the WiFi Access Point (AP) mode of the Vigilant Engine.
 endmenu
 
+rsource "../vigilant-engine-recovery/Kconfig.network"
+
 menu "Vigilant Engine Configuration: I2C"
     config VE_ENABLE_I2C
         bool "Enable I2C"
