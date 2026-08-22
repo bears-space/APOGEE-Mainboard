@@ -38,7 +38,7 @@ if(NOT VE_MAIN_APP_OFFSET)
     message(FATAL_ERROR "Could not find ota_0 partition offset for main firmware flashing.")
 endif()
 
-if(NOT VE_RECOVERY_APP_OFFSET)
+if(CONFIG_SOC_WIFI_SUPPORTED AND NOT VE_RECOVERY_APP_OFFSET)
     message(FATAL_ERROR "Could not find factory partition offset for recovery firmware flashing.")
 endif()
 
@@ -102,7 +102,6 @@ ve_remove_default_project_bin(encrypted-app-flash)
 ve_remove_default_project_bin(encrypted-flash)
 
 esptool_py_flash_target_image(app-flash app "${VE_MAIN_APP_OFFSET}" "${VE_BUILD_DIR}/${VE_PROJECT_BIN}")
-esptool_py_flash_target_image(flash recovery "${VE_RECOVERY_APP_OFFSET}" "${VE_RECOVERY_BIN}" ALWAYS_PLAINTEXT)
 esptool_py_flash_target_image(flash app "${VE_MAIN_APP_OFFSET}" "${VE_BUILD_DIR}/${VE_PROJECT_BIN}")
 
 if(CONFIG_SOC_WIFI_SUPPORTED)
@@ -170,4 +169,3 @@ if(CONFIG_SOC_WIFI_SUPPORTED)
 else()
     message(STATUS "Skipping Wi-Fi recovery firmware for ${VE_IDF_TARGET}")
 endif()
-
