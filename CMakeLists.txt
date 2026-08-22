@@ -105,37 +105,6 @@ esptool_py_flash_target_image(app-flash app "${VE_MAIN_APP_OFFSET}" "${VE_BUILD_
 esptool_py_flash_target_image(flash recovery "${VE_RECOVERY_APP_OFFSET}" "${VE_RECOVERY_BIN}" ALWAYS_PLAINTEXT)
 esptool_py_flash_target_image(flash app "${VE_MAIN_APP_OFFSET}" "${VE_BUILD_DIR}/${VE_PROJECT_BIN}")
 
-<<<<<<< Updated upstream
-add_custom_target(ve_recovery_build ALL
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/partitions.csv"
-            "${VE_RECOVERY_PARTITIONS_CSV}"
-    COMMAND "${CMAKE_COMMAND}" -E env
-            ${VE_RECOVERY_BUILD_ENV}
-            "${CMAKE_COMMAND}"
-            -G "${CMAKE_GENERATOR}"
-            -B "${VE_RECOVERY_BUILD_DIR}"
-            -S "${VE_RECOVERY_PROJECT_DIR}"
-            "-DPYTHON_DEPS_CHECKED=1"
-            "-DPYTHON=${VE_PYTHON}"
-            "-DESP_PLATFORM=1"
-            "-DIDF_TARGET=${VE_IDF_TARGET}"
-            "-DSDKCONFIG=${VE_RECOVERY_SDKCONFIG}"
-            "-DSDKCONFIG_DEFAULTS=${VE_RECOVERY_PROJECT_DIR}/sdkconfig.defaults"
-            "-DVE_BUILD_WEB=${VE_BUILD_WEB}"
-            "-DVE_RECOVERY_HTML=${VE_RECOVERY_HTML}"
-    COMMAND "${CMAKE_COMMAND}" -E env
-            ${VE_RECOVERY_BUILD_ENV}
-            "${CMAKE_COMMAND}" --build "${VE_RECOVERY_BUILD_DIR}"
-    BYPRODUCTS "${VE_RECOVERY_BIN}" "${VE_RECOVERY_PARTITIONS_CSV}"
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    USES_TERMINAL
-    VERBATIM
-)
-
-add_dependencies(ve_recovery_build app)
-add_dependencies(flash ve_recovery_build)
-=======
 if(CONFIG_SOC_WIFI_SUPPORTED)
     if(CONFIG_VE_RECOVERY_NETWORK_MODE_APSTA)
         set(VE_RECOVERY_NETWORK_MODE_VALUE 2)
@@ -201,4 +170,4 @@ if(CONFIG_SOC_WIFI_SUPPORTED)
 else()
     message(STATUS "Skipping Wi-Fi recovery firmware for ${VE_IDF_TARGET}")
 endif()
->>>>>>> Stashed changes
+
