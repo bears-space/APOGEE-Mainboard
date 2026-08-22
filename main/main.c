@@ -10,10 +10,20 @@
 // static const char *TAG = "app_main";
 
 void app_main(void) {
-    set_fan_speed(100);
-    start_fan();
-    
     VigilantConfig VgConfig = {.unique_component_name = "Vigilant ESP Test",
                                .network_mode = NW_MODE_APSTA};
     ESP_ERROR_CHECK(vigilant_init(VgConfig));
+
+    fan_init();
+
+    while (1) {
+        set_fan_speed(100);
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        set_fan_speed(20);
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        set_fan_speed(5);
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        set_fan_speed(1);
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+    }
 }

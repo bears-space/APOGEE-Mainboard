@@ -1,0 +1,10 @@
+menu "Fan Configuration"
+
+    config FAN_PIN
+        int "Fan GPIO"
+        range 0 64
+        default 0
+        help
+            GPIO pin used to control the fan.
+
+endmenu
