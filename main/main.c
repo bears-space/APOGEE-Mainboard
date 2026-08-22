@@ -14,4 +14,11 @@ void app_main(void) {
     VigilantConfig VgConfig = {.unique_component_name = "Vigilant ESP Test",
                                .network_mode = NW_MODE_APSTA};
     ESP_ERROR_CHECK(vigilant_init(VgConfig));
+
+    fan_init();
+    while (1) {
+        int rpm = fan_get_rpm();
+        ESP_LOGI(TAG, "Fan RPM: %d", rpm);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }

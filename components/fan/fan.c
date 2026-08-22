@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 
+#include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/pulse_cnt.h"
 #include "esp_log.h"
@@ -58,6 +59,7 @@ void pulse_counter_init(void) {
     pcnt_chan_config_t channel_config = {
         .edge_gpio_num = CONFIG_PCNT_PIN,
         .level_gpio_num = -1,
+        .flags.invert_edge_input = true,
     };
 
     ESP_ERROR_CHECK(
@@ -69,10 +71,12 @@ void pulse_counter_init(void) {
         PCNT_CHANNEL_EDGE_ACTION_HOLD       // falling edge
         ));
 
+    ESP_ERROR_CHECK(gpio_pullup_en(CONFIG_PCNT_PIN));
     ESP_ERROR_CHECK(pcnt_unit_enable(pcnt_unit));
     ESP_ERROR_CHECK(pcnt_unit_clear_count(pcnt_unit));
     pcnt_sample_start_us = esp_timer_get_time();
     ESP_ERROR_CHECK(pcnt_unit_start(pcnt_unit));
+
 }
 
 void fan_init(void) {
