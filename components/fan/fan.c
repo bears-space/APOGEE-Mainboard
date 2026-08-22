@@ -68,10 +68,12 @@ void set_fan_speed(int speed)
 
 void stop_fan(void)
 {
+    set_fan_speed(0);
     ESP_LOGI(TAG, "Stopping fan");
 }
 
 void start_fan(void)
 {
+    set_fan_speed(100);
     ESP_LOGI(TAG, "Starting fan");
 }
