@@ -136,6 +136,27 @@ characters.
 
 **default**: `"starstreak"`
 ___
+#### `VE_RECOVERY_AP_CHANNEL`, **int**
+The WiFi channel used by the recovery access point.
+
+**range**: `1` to `14`
+
+**default**: `6`
+___
+#### `VE_RECOVERY_MAX_CONN`, **int**
+The maximum number of stations that can connect to the recovery access point simultaneously.
+
+**range**: `1` to `15`
+
+**default**: `2`
+___
+#### `VE_RECOVERY_CONNECTION_TIMEOUT_SECONDS`, **int**
+The number of seconds recovery waits for its station interface to connect before continuing.
+
+**range**: `1` to `3600`
+
+**default**: `30`
+___
 ## Vigilant Engine Settings
 ___
 #### `VE_DISABLE_FRONTEND`, **bool**

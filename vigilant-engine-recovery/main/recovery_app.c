@@ -53,12 +53,11 @@ typedef enum {
 #define VE_RECOVERY_STA_PASSWORD CONFIG_VE_RECOVERY_STA_PASSWORD
 #define VE_RECOVERY_AP_SSID_PREFIX CONFIG_VE_RECOVERY_AP_SSID_PREFIX
 #define VE_RECOVERY_AP_PASSWORD CONFIG_VE_RECOVERY_AP_PASSWORD
+#define VE_RECOVERY_AP_CHANNEL CONFIG_VE_VE_RECOVERY_AP_CHANNEL
+#define VE_RECOVERY_MAX_CONN CONFIG_VE_VE_RECOVERY_MAX_CONN
+#define VE_RECOVERY_CONNECTION_TIMEOUT_SECONDS \
+    CONFIG_VE_VE_RECOVERY_CONNECTION_TIMEOUT_SECONDS
 #endif
-
-// ---- WiFi Config ----
-#define RECOVERY_AP_CHANNEL 6
-#define RECOVERY_MAX_CONN 2
-#define RECOVERY_CONNECTION_TIMEOUT_SECONDS 30
 
 // ---- OTA ----
 #define OTA_BUF_SIZE 2048
@@ -392,8 +391,8 @@ static void wifi_init_recovery(void) {
         ap_cfg.ap.ssid_len =
             copy_wifi_ssid(ap_cfg.ap.ssid, sizeof(ap_cfg.ap.ssid), ap_ssid,
                            "Recovery AP SSID");
-        ap_cfg.ap.channel = RECOVERY_AP_CHANNEL;
-        ap_cfg.ap.max_connection = RECOVERY_MAX_CONN;
+        ap_cfg.ap.channel = VE_RECOVERY_AP_CHANNEL;
+        ap_cfg.ap.max_connection = VE_RECOVERY_MAX_CONN;
         copy_wifi_config_value(ap_cfg.ap.password, sizeof(ap_cfg.ap.password),
                                VE_RECOVERY_AP_PASSWORD, "Recovery AP password");
         ap_cfg.ap.authmode = strlen(VE_RECOVERY_AP_PASSWORD) == 0
@@ -501,9 +500,9 @@ void app_main(void) {
 
     bool network_ready = false;
     for (size_t i = 0;
-         i < RECOVERY_CONNECTION_TIMEOUT_SECONDS && !network_ready; i++) {
+         i < VE_RECOVERY_CONNECTION_TIMEOUT_SECONDS && !network_ready; i++) {
         ESP_LOGI(TAG, "Waiting for recovery network... (%u/%u)",
-                 (unsigned int)(i + 1), RECOVERY_CONNECTION_TIMEOUT_SECONDS);
+                 (unsigned int)(i + 1), VE_RECOVERY_CONNECTION_TIMEOUT_SECONDS);
         network_ready = recovery_network_ready();
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
