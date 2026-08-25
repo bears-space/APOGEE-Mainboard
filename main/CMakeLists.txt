@@ -1,5 +1,5 @@
 idf_component_register(
     SRCS "main.c"
     INCLUDE_DIRS "."
-    REQUIRES vigilant_engine
+    REQUIRES vigilant_engine BQ769x2
 )
