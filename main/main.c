@@ -1,15 +1,24 @@
 #include <unistd.h>
 
+#include "esp_err.h"
 #include "esp_log.h"
+#include "fan.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "status_led.h"
 #include "vigilant.h"
 
-// static const char *TAG = "app_main";
+static const char* TAG = "app_main";
 
 void app_main(void) {
     VigilantConfig VgConfig = {.unique_component_name = "Vigilant ESP Test",
                                .network_mode = NW_MODE_APSTA};
     ESP_ERROR_CHECK(vigilant_init(VgConfig));
+
+    fan_init();
+    while (1) {
+        int rpm = fan_get_rpm();
+        ESP_LOGI(TAG, "Fan RPM: %d", rpm);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }
