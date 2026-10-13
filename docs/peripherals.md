@@ -1,3 +1,11 @@
+<!--
+# SPDX-AI-Disclosure: ai-assisted
+# SPDX-AI-Model: gpt-6
+# SPDX-AI-Provider: OpenAI
+# SPDX-AI-Scope: Documentation updates and loopback behavior corrections.
+# SPDX-AI-Date: 2026-10-13
+-->
+
 # Peripherals
 
 Vigilant Engine includes drivers and integration for common peripherals used across STARSTREAK nodes.
@@ -16,6 +24,10 @@ Vigilant Engine also provides an optional shared I2C master interface for extern
 For setup and API usage, see the [I2C Interface](./i2c-interface.md) page.
 
 ## TCAN4550-Q1 CAN-FD verification
+
+The driver now uses the TI TCAN4550 library with an ESP-IDF SPI backend. Source,
+BSD-3-Clause notices, API details, and validation instructions are documented in
+[`components/tcan4550/README.md`](https://github.com/bears-space/APOGEE-Mainboard/blob/main/components/tcan4550/README.md).
 
 The main application contains a boot-time hardware check and a continuous CAN
 frame logger for this ESP32-S3 connection:
@@ -40,7 +52,7 @@ At boot, the firmware performs these checks:
 3. Clears and configures all 2 KiB of ECC-protected message RAM.
 4. Sends and receives a 16-byte, bit-rate-switched CAN-FD frame in internal
    loopback.
-5. Attempts external loopback through the integrated transceiver and CAN pins.
+5. Optionally runs external loopback when explicitly enabled for a test bus.
 6. Enters normal CAN mode and logs every frame accepted into RX FIFO 0.
 
 The default timing is 500 kbit/s arbitration and 2 Mbit/s CAN-FD data. The
@@ -50,12 +62,13 @@ FIFO over SPI once per FreeRTOS scheduler tick. A CAN-silent indication is
 expected and logged once when no other CAN node is connected; it is not treated
 as a module fault. Timestamp-counter wraparound is likewise informational.
 
-Internal loopback proves the ESP32-to-SPI connection, controller, and message
-RAM. External loopback additionally exercises the transceiver path. A scope or
-a second CAN node is still required to validate voltage levels and operation on
-a real, correctly terminated multi-node bus. If the module has no onboard CAN
-termination, fit the termination required by the module before interpreting an
-external-loopback failure.
+Internal loopback tests the ESP32-to-SPI connection, controller, and message
+RAM. External loopback internally feeds TX back to RX while driving the CAN
+pins; it does not verify the physical receive path. It is disabled by default
+because it transmits a CAN-FD beacon onto the connected bus. A scope or a second
+CAN-FD node is required to validate the transceiver and a correctly terminated
+multi-node bus. Initialization starts passive monitoring; the example explicitly
+enables normal operation after internal loopback.
 
 Build, flash, and open the serial monitor with:
 

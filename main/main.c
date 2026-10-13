@@ -1,3 +1,11 @@
+/*
+# SPDX-AI-Disclosure: ai-assisted
+# SPDX-AI-Model: gpt-6
+# SPDX-AI-Provider: OpenAI
+# SPDX-AI-Scope: External-loopback default, comments, and diagnostic message changes.
+# SPDX-AI-Date: 2026-10-13
+*/
+
 #include <inttypes.h>
 #include <stdio.h>
 
@@ -25,8 +33,9 @@
 #define TCAN4550_NOMINAL_BITRATE 500000U
 #define TCAN4550_DATA_BITRATE 2000000U
 
-/* External loopback exercises the transceiver and CANH/CANL path. */
-#define TCAN4550_RUN_EXTERNAL_LOOPBACK_TEST 1
+/* External loopback emits a frame onto CANH/CANL. Enable only on a test bus.
+ * Its internally fed-back reception does not verify the physical RX path. */
+#define TCAN4550_RUN_EXTERNAL_LOOPBACK_TEST 0
 
 #define TCAN_MCAN_IR_EXPECTED \
     ((1UL << 16) | (1UL << 9) | (1UL << 2) | (1UL << 0))
@@ -170,7 +179,7 @@ static void start_tcan4550_verification(void) {
     if (err != ESP_OK) {
         ESP_LOGW(TAG,
                  "TCAN4550 external loopback FAILED (%s). SPI/controller are "
-                 "working; check CANH/CANL and termination.",
+                 "working; inspect device diagnostics.",
                  esp_err_to_name(err));
     }
 #endif

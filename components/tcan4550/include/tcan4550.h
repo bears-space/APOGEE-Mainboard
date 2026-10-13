@@ -1,3 +1,11 @@
+/*
+# SPDX-AI-Disclosure: ai-assisted
+# SPDX-AI-Model: gpt-6
+# SPDX-AI-Provider: OpenAI
+# SPDX-AI-Scope: Public API additions and documentation changes.
+# SPDX-AI-Date: 2026-10-13
+*/
+
 #pragma once
 
 #include <stdbool.h>
@@ -44,7 +52,8 @@ typedef struct {
 typedef enum {
     /** Tests the SPI interface, M_CAN core, and message RAM. */
     TCAN4550_LOOPBACK_INTERNAL,
-    /** Also drives and reads back through the CAN transceiver. */
+    /** Internally loops TX to RX while also driving the CAN bus.
+     * Does not verify the physical transceiver receive path. */
     TCAN4550_LOOPBACK_EXTERNAL,
 } tcan4550_loopback_t;
 
@@ -57,12 +66,17 @@ typedef struct {
 } tcan4550_diagnostics_t;
 
 /**
- * Initialize the singleton TCAN4550 instance and verify SPI reads and writes.
+ * Initialize the singleton through the TI library and verify SPI reads/writes.
+ * Starts in passive monitor mode; call start(false) for normal operation.
+ * Init and deinit require exclusive ownership (stop all client tasks first).
  *
  * The oscillator must be either 20 MHz or 40 MHz. Bit timing is calculated
  * from oscillator_hz, nominal_bitrate, and data_bitrate.
  */
 esp_err_t tcan4550_init(const tcan4550_config_t* config);
+
+/** Enter standby and free SPI/mutex resources. Stop all client tasks first. */
+esp_err_t tcan4550_deinit(void);
 
 /**
  * Send and receive a known 16-byte CAN-FD beacon in the selected loopback mode.
@@ -79,7 +93,10 @@ esp_err_t tcan4550_run_loopback_test(tcan4550_loopback_t loopback,
  */
 esp_err_t tcan4550_start(bool monitor_only);
 
-/** Transmit one frame and wait for completion. */
+/** Transmit one frame and wait for completion. Rejected in passive monitor
+ * mode. On timeout, cancellation is requested and completion checked for up to
+ * 100 ms. A frame already on the bus may complete despite the cancellation
+ * request. */
 esp_err_t tcan4550_transmit(const tcan4550_frame_t* frame, uint32_t timeout_ms);
 
 /** Receive the oldest FIFO frame, waiting for up to timeout_ms. */

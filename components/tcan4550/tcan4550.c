@@ -1,3 +1,11 @@
+/*
+# SPDX-AI-Disclosure: ai-assisted
+# SPDX-AI-Model: gpt-6
+# SPDX-AI-Provider: OpenAI
+# SPDX-AI-Scope: ESP-IDF wrapper implementation, TI integration, and correctness fixes.
+# SPDX-AI-Date: 2026-10-13
+*/
+
 #include "tcan4550.h"
 
 #include <inttypes.h>
@@ -7,13 +15,9 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
-
-#define TCAN_SPI_READ_OPCODE 0x41U
-#define TCAN_SPI_WRITE_OPCODE 0x61U
-#define TCAN_SPI_MAX_WORDS 32U
-#define TCAN_SPI_HEADER_BYTES 4U
+#include "tcan4550_spi.h"
+#include "tcan4550_ti.h"
 
 #define TCAN_REG_DEVICE_ID1 0x0000U
 #define TCAN_REG_DEVICE_ID2 0x0004U
@@ -23,43 +27,22 @@
 #define TCAN_REG_SCRATCH 0x0808U
 #define TCAN_REG_DEVICE_IR 0x0820U
 
-#define TCAN_REG_DBTP 0x100CU
 #define TCAN_REG_TEST 0x1010U
 #define TCAN_REG_CCCR 0x1018U
-#define TCAN_REG_NBTP 0x101CU
-#define TCAN_REG_TSCC 0x1020U
 #define TCAN_REG_ECR 0x1040U
 #define TCAN_REG_PSR 0x1044U
-#define TCAN_REG_TDCR 0x1048U
 #define TCAN_REG_IR 0x1050U
 #define TCAN_REG_IE 0x1054U
 #define TCAN_REG_ILS 0x1058U
 #define TCAN_REG_ILE 0x105CU
-#define TCAN_REG_GFC 0x1080U
-#define TCAN_REG_SIDFC 0x1084U
-#define TCAN_REG_XIDFC 0x1088U
 #define TCAN_REG_XIDAM 0x1090U
-#define TCAN_REG_RXF0C 0x10A0U
 #define TCAN_REG_RXF0S 0x10A4U
 #define TCAN_REG_RXF0A 0x10A8U
-#define TCAN_REG_RXBC 0x10ACU
-#define TCAN_REG_RXF1C 0x10B0U
-#define TCAN_REG_RXESC 0x10BCU
-#define TCAN_REG_TXBC 0x10C0U
-#define TCAN_REG_TXESC 0x10C8U
 #define TCAN_REG_TXBRP 0x10CCU
-#define TCAN_REG_TXBAR 0x10D0U
 #define TCAN_REG_TXBCR 0x10D4U
 #define TCAN_REG_TXBTO 0x10D8U
-#define TCAN_REG_TXEFC 0x10F0U
 
-#define TCAN_MRAM_BASE 0x8000U
-#define TCAN_MRAM_SIZE_BYTES 2048U
-#define TCAN_MRAM_ELEMENT_BYTES 72U
 #define TCAN_RX_FIFO_ELEMENTS 16U
-#define TCAN_RX_FIFO_START 0x0000U
-#define TCAN_TX_BUFFER_START \
-    (TCAN_RX_FIFO_START + TCAN_RX_FIFO_ELEMENTS * TCAN_MRAM_ELEMENT_BYTES)
 
 #define TCAN_DEVICE_ID1_VALUE 0x4E414354UL
 #define TCAN_DEVICE_ID2_VALUE 0x30353534UL
@@ -97,6 +80,7 @@
 
 typedef enum {
     TCAN_STATE_UNINITIALIZED,
+    TCAN_STATE_FAULT,
     TCAN_STATE_INTERNAL_LOOPBACK,
     TCAN_STATE_EXTERNAL_LOOPBACK,
     TCAN_STATE_RUNNING,
@@ -104,89 +88,51 @@ typedef enum {
 
 typedef struct {
     tcan4550_config_t config;
-    spi_device_handle_t spi;
-    SemaphoreHandle_t mutex;
     tcan_state_t state;
+    bool monitor_only;
     uint32_t nbtp;
     uint32_t dbtp;
     uint32_t tdcr;
-    uint8_t last_global_status;
-    uint8_t tx_buffer[TCAN_SPI_HEADER_BYTES + TCAN_SPI_MAX_WORDS * 4U]
-        __attribute__((aligned(4)));
-    uint8_t rx_buffer[TCAN_SPI_HEADER_BYTES + TCAN_SPI_MAX_WORDS * 4U]
-        __attribute__((aligned(4)));
 } tcan4550_context_t;
 
 static const char* TAG = "tcan4550";
 static tcan4550_context_t s_tcan;
 
-static void encode_be32(uint8_t* destination, uint32_t value) {
-    destination[0] = (uint8_t)(value >> 24);
-    destination[1] = (uint8_t)(value >> 16);
-    destination[2] = (uint8_t)(value >> 8);
-    destination[3] = (uint8_t)value;
-}
-
-static uint32_t decode_be32(const uint8_t* source) {
-    return ((uint32_t)source[0] << 24) | ((uint32_t)source[1] << 16) |
-           ((uint32_t)source[2] << 8) | (uint32_t)source[3];
-}
-
-static esp_err_t spi_words(uint8_t opcode, uint16_t address,
-                           const uint32_t* write_words, uint32_t* read_words,
-                           size_t word_count) {
-    if (word_count == 0 || word_count > TCAN_SPI_MAX_WORDS) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    const size_t transfer_bytes = TCAN_SPI_HEADER_BYTES + word_count * 4U;
-    memset(s_tcan.tx_buffer, 0, transfer_bytes);
-    memset(s_tcan.rx_buffer, 0, transfer_bytes);
-    s_tcan.tx_buffer[0] = opcode;
-    s_tcan.tx_buffer[1] = (uint8_t)(address >> 8);
-    s_tcan.tx_buffer[2] = (uint8_t)address;
-    s_tcan.tx_buffer[3] = (uint8_t)word_count;
-
-    if (write_words != NULL) {
-        for (size_t index = 0; index < word_count; ++index) {
-            encode_be32(&s_tcan.tx_buffer[TCAN_SPI_HEADER_BYTES + index * 4U],
-                        write_words[index]);
-        }
-    }
-
-    spi_transaction_t transaction = {
-        .length = transfer_bytes * 8U,
-        .tx_buffer = s_tcan.tx_buffer,
-        .rx_buffer = s_tcan.rx_buffer,
-    };
-    esp_err_t err = spi_device_polling_transmit(s_tcan.spi, &transaction);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    s_tcan.last_global_status = s_tcan.rx_buffer[0];
-    if (read_words != NULL) {
-        for (size_t index = 0; index < word_count; ++index) {
-            read_words[index] = decode_be32(
-                &s_tcan.rx_buffer[TCAN_SPI_HEADER_BYTES + index * 4U]);
-        }
-    }
-    return ESP_OK;
-}
-
 static esp_err_t register_read(uint16_t address, uint32_t* value) {
-    return spi_words(TCAN_SPI_READ_OPCODE, address, NULL, value, 1);
+    *value = AHB_READ_32(address);
+    return tcan4550_spi_error();
 }
 
 static esp_err_t register_write(uint16_t address, uint32_t value) {
-    return spi_words(TCAN_SPI_WRITE_OPCODE, address, &value, NULL, 1);
+    AHB_WRITE_32(address, value);
+    return tcan4550_spi_error();
+}
+
+static esp_err_t ti_result(bool result) {
+    const esp_err_t err = tcan4550_spi_error();
+    return err != ESP_OK ? err : (result ? ESP_OK : ESP_ERR_INVALID_RESPONSE);
+}
+
+static esp_err_t finish_session(esp_err_t err) {
+    const esp_err_t transport_err = tcan4550_spi_error();
+    if (transport_err != ESP_OK) {
+        s_tcan.state = TCAN_STATE_FAULT;
+    }
+    const esp_err_t end_err = tcan4550_ti_end();
+    return end_err != ESP_OK ? end_err : err;
+}
+
+static TickType_t timeout_ticks(uint32_t milliseconds) {
+    const uint64_t ticks =
+        ((uint64_t)milliseconds * configTICK_RATE_HZ + 999U) / 1000U;
+    return ticks >= portMAX_DELAY ? portMAX_DELAY - 1U : (TickType_t)ticks;
 }
 
 static esp_err_t wait_for_register_bits(uint16_t address, uint32_t mask,
                                         uint32_t expected,
                                         uint32_t timeout_ms) {
     const TickType_t start = xTaskGetTickCount();
-    const TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
+    const TickType_t timeout = timeout_ticks(timeout_ms);
 
     do {
         uint32_t value = 0;
@@ -195,7 +141,9 @@ static esp_err_t wait_for_register_bits(uint16_t address, uint32_t mask,
         if ((value & mask) == expected) {
             return ESP_OK;
         }
-        /* One scheduler tick is 10 ms with the project's 100 Hz tick rate. */
+        if ((xTaskGetTickCount() - start) >= timeout) {
+            break;
+        }
         vTaskDelay(1);
     } while ((xTaskGetTickCount() - start) <= timeout);
 
@@ -263,10 +211,15 @@ static esp_err_t calculate_data_timing(uint32_t clock_hz, uint32_t bitrate,
         }
 
         const uint32_t sync_jump_width = time_seg2;
-        *dbtp = (1UL << 23) | ((prescaler - 1U) << 16) |
-                ((time_seg1 - 1U) << 8) | ((time_seg2 - 1U) << 4) |
-                (sync_jump_width - 1U);
-        *tdcr = (before_sample - 1U) << 8;
+        *dbtp = ((prescaler - 1U) << 16) | ((time_seg1 - 1U) << 8) |
+                ((time_seg2 - 1U) << 4) | (sync_jump_width - 1U);
+        /* TDCO uses CAN clock periods, not prescaled time quanta.
+         * M_CAN TDC supports actual data prescalers 1 and 2 only. */
+        *tdcr = 0;
+        if (prescaler <= 2) {
+            *dbtp |= 1UL << 23;
+            *tdcr = ((before_sample - 1U) * prescaler) << 8;
+        }
         return ESP_OK;
     }
 
@@ -300,66 +253,51 @@ static esp_err_t mcan_leave_initialization(uint32_t cccr_mode) {
     return wait_for_register_bits(TCAN_REG_CCCR, TCAN_CCCR_INIT, 0, 100);
 }
 
-static esp_err_t clear_message_ram(void) {
-    uint32_t zero_words[TCAN_SPI_MAX_WORDS] = {0};
-    for (uint16_t offset = 0; offset < TCAN_MRAM_SIZE_BYTES;
-         offset += (uint16_t)sizeof(zero_words)) {
-        ESP_RETURN_ON_ERROR(
-            spi_words(TCAN_SPI_WRITE_OPCODE, TCAN_MRAM_BASE + offset,
-                      zero_words, NULL, TCAN_SPI_MAX_WORDS),
-            TAG, "Could not clear message RAM at 0x%04X",
-            TCAN_MRAM_BASE + offset);
-    }
-    return ESP_OK;
-}
-
 static esp_err_t configure_message_ram(void) {
-    ESP_RETURN_ON_ERROR(clear_message_ram(), TAG, "Message RAM clear failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_SIDFC, 0), TAG,
-                        "SID filter configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_XIDFC, 0), TAG,
-                        "XID filter configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_GFC, 0), TAG,
-                        "Global filter configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_XIDAM, 0x1FFFFFFFUL), TAG,
-                        "Extended ID mask configuration failed");
-    ESP_RETURN_ON_ERROR(
-        register_write(TCAN_REG_RXF0C,
-                       (TCAN_RX_FIFO_ELEMENTS << 16) | TCAN_RX_FIFO_START),
-        TAG, "RX FIFO 0 configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_RXF1C, 0), TAG,
-                        "RX FIFO 1 configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_RXBC, 0), TAG,
-                        "RX buffer configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_RXESC, 7), TAG,
-                        "RX element size configuration failed");
-    ESP_RETURN_ON_ERROR(
-        register_write(TCAN_REG_TXBC,
-                       (1UL << 16) | (uint32_t)TCAN_TX_BUFFER_START),
-        TAG, "TX buffer configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_TXESC, 7), TAG,
-                        "TX element size configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_TXEFC, 0), TAG,
-                        "TX event FIFO configuration failed");
-    return ESP_OK;
+    TCAN4x5x_MRAM_Clear();
+    ESP_RETURN_ON_ERROR(tcan4550_spi_error(), TAG, "Message RAM clear failed");
+    TCAN4x5x_MRAM_Config ram = {
+        .Rx0NumElements = TCAN_RX_FIFO_ELEMENTS,
+        .Rx0ElementSize = MRAM_64_Byte_Data,
+        .TxBufferNumElements = 1,
+        .TxBufferElementSize = MRAM_64_Byte_Data,
+    };
+    ESP_RETURN_ON_ERROR(ti_result(TCAN4x5x_MRAM_Configure(&ram)), TAG,
+                        "TI message RAM configuration failed");
+    TCAN4x5x_MCAN_Global_Filter_Configuration filter = {.word = 0};
+    ESP_RETURN_ON_ERROR(ti_result(TCAN4x5x_MCAN_ConfigureGlobalFilter(&filter)),
+                        TAG, "TI global filter configuration failed");
+    return register_write(TCAN_REG_XIDAM, 0x1FFFFFFFUL);
 }
 
 static esp_err_t configure_mcan(void) {
     ESP_RETURN_ON_ERROR(mcan_enter_initialization(), TAG,
                         "Could not enter M_CAN initialization");
 
-    const uint32_t cccr =
-        TCAN_CCCR_INIT | TCAN_CCCR_CCE | TCAN_CCCR_FDOE | TCAN_CCCR_BRSE;
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_CCCR, cccr), TAG,
-                        "CAN-FD control configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_NBTP, s_tcan.nbtp), TAG,
-                        "Nominal bit timing configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_DBTP, s_tcan.dbtp), TAG,
-                        "Data bit timing configuration failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_TDCR, s_tcan.tdcr), TAG,
-                        "Transmitter delay compensation failed");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_TSCC, 2), TAG,
-                        "Timestamp configuration failed");
+    TCAN4x5x_MCAN_CCCR_Config control = {
+        .word = TCAN_CCCR_FDOE | TCAN_CCCR_BRSE | TCAN_CCCR_MON,
+    };
+    ESP_RETURN_ON_ERROR(
+        ti_result(TCAN4x5x_MCAN_ConfigureCCCRRegister(&control)), TAG,
+        "TI CAN-FD control configuration failed");
+    TCAN4x5x_MCAN_Nominal_Timing_Raw nominal = {
+        .NominalBitRatePrescaler = (s_tcan.nbtp >> 16) & 0x1FF,
+        .NominalTimeSeg1andProp = (s_tcan.nbtp >> 8) & 0xFF,
+        .NominalTimeSeg2 = s_tcan.nbtp & 0x7F,
+        .NominalSyncJumpWidth = (s_tcan.nbtp >> 25) & 0x7F,
+    };
+    ESP_RETURN_ON_ERROR(
+        ti_result(TCAN4x5x_MCAN_ConfigureNominalTiming_Raw(&nominal)), TAG,
+        "TI nominal timing configuration failed");
+    TCAN4x5x_MCAN_Data_Timing_Raw data = {
+        .DataBitRatePrescaler = (s_tcan.dbtp >> 16) & 0x1F,
+        .DataTimeSeg1andProp = (s_tcan.dbtp >> 8) & 0x1F,
+        .DataTimeSeg2 = (s_tcan.dbtp >> 4) & 0xF,
+        .DataSyncJumpWidth = s_tcan.dbtp & 0xF,
+        .TDCOffset = (s_tcan.tdcr >> 8) & 0x7F,
+    };
+    ESP_RETURN_ON_ERROR(ti_result(TCAN4x5x_MCAN_ConfigureDataTiming_Raw(&data)),
+                        TAG, "TI data timing configuration failed");
     ESP_RETURN_ON_ERROR(configure_message_ram(), TAG,
                         "Message RAM configuration failed");
 
@@ -374,34 +312,40 @@ static esp_err_t configure_mcan(void) {
     ESP_RETURN_ON_ERROR(register_write(TCAN_REG_TEST, 0), TAG,
                         "M_CAN test mode clear failed");
 
-    ESP_RETURN_ON_ERROR(
-        mcan_leave_initialization(TCAN_CCCR_FDOE | TCAN_CCCR_BRSE), TAG,
-        "Could not start configured M_CAN");
+    ESP_RETURN_ON_ERROR(mcan_leave_initialization(
+                            TCAN_CCCR_FDOE | TCAN_CCCR_BRSE | TCAN_CCCR_MON),
+                        TAG, "Could not start configured M_CAN");
     s_tcan.state = TCAN_STATE_RUNNING;
+    s_tcan.monitor_only = true;
     return ESP_OK;
 }
 
 static esp_err_t configure_device_mode(void) {
-    uint32_t device_interrupts = 0;
-    ESP_RETURN_ON_ERROR(register_read(TCAN_REG_DEVICE_IR, &device_interrupts),
-                        TAG, "Could not read device interrupts");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_DEVICE_IR, device_interrupts),
-                        TAG, "Could not clear device interrupts");
-
-    uint32_t modes = 0;
-    ESP_RETURN_ON_ERROR(register_read(TCAN_REG_MODES, &modes), TAG,
-                        "Could not read device modes");
-    modes &= ~(TCAN_MODES_CLK_REF_40MHZ | TCAN_MODES_TEST_MODE_EN |
-               TCAN_MODES_MODE_MASK | TCAN_MODES_WATCHDOG_EN |
-               TCAN_MODES_DEVICE_RESET | TCAN_MODES_TEST_CONFIG);
-    modes |= TCAN_MODES_RESERVED_SET | TCAN_MODES_MODE_NORMAL;
+    /* Keep the transceiver off the bus until timing/RAM and MON are configured.
+     */
+    ESP_RETURN_ON_ERROR(
+        ti_result(TCAN4x5x_Device_SetMode(TCAN4x5x_DEVICE_MODE_STANDBY)), TAG,
+        "TI standby device mode failed");
+    TCAN4x5x_Device_Interrupts interrupts = {0};
+    TCAN4x5x_Device_ReadInterrupts(&interrupts);
+    interrupts.word &= TCAN_DEVICE_IR_W1C_MASK;
+    TCAN4x5x_Device_ClearInterrupts(&interrupts);
+    ESP_RETURN_ON_ERROR(tcan4550_spi_error(), TAG,
+                        "TI device interrupt clear failed");
+    TCAN4x5x_DEV_CONFIG config = {0};
+    TCAN4x5x_Device_ReadConfig(&config);
+    ESP_RETURN_ON_ERROR(tcan4550_spi_error(), TAG,
+                        "TI device configuration read failed");
+    config.word &= ~(TCAN_MODES_CLK_REF_40MHZ | TCAN_MODES_TEST_MODE_EN |
+                     TCAN_MODES_WATCHDOG_EN | TCAN_MODES_DEVICE_RESET |
+                     TCAN_MODES_TEST_CONFIG);
+    config.word |= TCAN_MODES_RESERVED_SET;
     if (s_tcan.config.oscillator_hz == 40000000U) {
-        modes |= TCAN_MODES_CLK_REF_40MHZ;
+        config.word |= TCAN_MODES_CLK_REF_40MHZ;
     }
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_MODES, modes), TAG,
-                        "Could not enter normal device mode");
-    return wait_for_register_bits(TCAN_REG_MODES, TCAN_MODES_MODE_MASK,
-                                  TCAN_MODES_MODE_NORMAL, 100);
+    ESP_RETURN_ON_ERROR(ti_result(TCAN4x5x_Device_Configure(&config)), TAG,
+                        "TI device configuration failed");
+    return ESP_OK;
 }
 
 static esp_err_t discard_received_frames(void) {
@@ -420,6 +364,7 @@ static esp_err_t discard_received_frames(void) {
 }
 
 static esp_err_t set_mcan_mode(tcan_state_t state, bool monitor_only) {
+    s_tcan.state = TCAN_STATE_FAULT;
     ESP_RETURN_ON_ERROR(mcan_enter_initialization(), TAG,
                         "Could not stop M_CAN to change mode");
 
@@ -442,18 +387,13 @@ static esp_err_t set_mcan_mode(tcan_state_t state, bool monitor_only) {
                         "Could not configure M_CAN loopback");
     ESP_RETURN_ON_ERROR(register_write(TCAN_REG_IR, UINT32_MAX), TAG,
                         "Could not clear M_CAN flags");
-    ESP_RETURN_ON_ERROR(mcan_leave_initialization(cccr), TAG,
-                        "Could not activate M_CAN mode");
     ESP_RETURN_ON_ERROR(discard_received_frames(), TAG,
                         "Could not empty RX FIFO");
+    ESP_RETURN_ON_ERROR(mcan_leave_initialization(cccr), TAG,
+                        "Could not activate M_CAN mode");
     s_tcan.state = state;
+    s_tcan.monitor_only = monitor_only;
     return ESP_OK;
-}
-
-static uint8_t dlc_to_length(uint8_t dlc) {
-    static const uint8_t lengths[] = {0, 1,  2,  3,  4,  5,  6,  7,
-                                      8, 12, 16, 20, 24, 32, 48, 64};
-    return dlc < sizeof(lengths) ? lengths[dlc] : 0;
 }
 
 static esp_err_t length_to_dlc(uint8_t length, uint8_t* dlc) {
@@ -522,43 +462,25 @@ static esp_err_t transmit_locked(const tcan4550_frame_t* frame,
         return ESP_ERR_INVALID_STATE;
     }
 
-    uint32_t element[TCAN_MRAM_ELEMENT_BYTES / 4U] = {0};
-    if (frame->extended) {
-        element[0] = frame->id & 0x1FFFFFFFUL;
-        element[0] |= 1UL << 30;
-    } else {
-        element[0] = (frame->id & 0x7FFU) << 18;
-    }
-    if (frame->remote) {
-        element[0] |= 1UL << 29;
-    }
-    if (frame->error_state_indicator) {
-        element[0] |= 1UL << 31;
-    }
-    element[1] = (uint32_t)dlc << 16;
-    if (frame->bit_rate_switch) {
-        element[1] |= 1UL << 20;
-    }
-    if (frame->fd_format) {
-        element[1] |= 1UL << 21;
-    }
-
-    for (uint8_t index = 0; index < frame->data_length; ++index) {
-        const size_t word_index = 2U + index / 4U;
-        element[word_index] |= (uint32_t)frame->data[index]
-                               << ((index % 4U) * 8U);
-    }
-
-    ESP_RETURN_ON_ERROR(
-        spi_words(TCAN_SPI_WRITE_OPCODE,
-                  TCAN_MRAM_BASE + (uint16_t)TCAN_TX_BUFFER_START, element,
-                  NULL, sizeof(element) / sizeof(element[0])),
-        TAG, "Could not write TX message RAM");
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_TXBAR, TCAN_TX_BUFFER_0), TAG,
-                        "Could not request transmission");
+    TCAN4x5x_MCAN_TX_Header header = {
+        .ID = frame->id,
+        .XTD = frame->extended,
+        .RTR = frame->remote,
+        .ESI = frame->error_state_indicator,
+        .DLC = dlc,
+        .BRS = frame->bit_rate_switch,
+        .FDF = frame->fd_format,
+    };
+    uint8_t payload[64] = {0};
+    memcpy(payload, frame->data, frame->data_length);
+    const uint32_t written = TCAN4x5x_MCAN_WriteTXBuffer(0, &header, payload);
+    ESP_RETURN_ON_ERROR(ti_result(written == TCAN_TX_BUFFER_0), TAG,
+                        "TI TX message RAM write failed");
+    ESP_RETURN_ON_ERROR(ti_result(TCAN4x5x_MCAN_TransmitBufferContents(0)), TAG,
+                        "TI transmission request failed");
 
     const TickType_t start = xTaskGetTickCount();
-    const TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
+    const TickType_t timeout = timeout_ticks(timeout_ms);
     do {
         uint32_t transmitted = 0;
         ESP_RETURN_ON_ERROR(register_read(TCAN_REG_TXBTO, &transmitted), TAG,
@@ -566,10 +488,20 @@ static esp_err_t transmit_locked(const tcan4550_frame_t* frame,
         if ((transmitted & TCAN_TX_BUFFER_0) != 0) {
             return ESP_OK;
         }
+        if ((xTaskGetTickCount() - start) >= timeout) {
+            break;
+        }
         vTaskDelay(1);
     } while ((xTaskGetTickCount() - start) <= timeout);
 
-    (void)register_write(TCAN_REG_TXBCR, TCAN_TX_BUFFER_0);
+    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_TXBCR, TCAN_TX_BUFFER_0), TAG,
+                        "TX cancellation request failed");
+    esp_err_t cancelled =
+        wait_for_register_bits(TCAN_REG_TXBRP, TCAN_TX_BUFFER_0, 0, 100);
+    if (cancelled != ESP_OK) {
+        s_tcan.state = TCAN_STATE_FAULT;
+        return cancelled;
+    }
     return ESP_ERR_TIMEOUT;
 }
 
@@ -582,37 +514,29 @@ static esp_err_t receive_locked(tcan4550_frame_t* frame) {
     }
 
     const uint32_t get_index = (fifo_status & TCAN_RXF0S_GET_INDEX_MASK) >> 8;
-    const uint16_t address = TCAN_MRAM_BASE + TCAN_RX_FIFO_START +
-                             (uint16_t)(get_index * TCAN_MRAM_ELEMENT_BYTES);
-    uint32_t element[TCAN_MRAM_ELEMENT_BYTES / 4U] = {0};
-    ESP_RETURN_ON_ERROR(spi_words(TCAN_SPI_READ_OPCODE, address, NULL, element,
-                                  sizeof(element) / sizeof(element[0])),
-                        TAG, "Could not read RX message RAM");
-
-    memset(frame, 0, sizeof(*frame));
-    frame->error_state_indicator = (element[0] & (1UL << 31)) != 0;
-    frame->extended = (element[0] & (1UL << 30)) != 0;
-    frame->remote = (element[0] & (1UL << 29)) != 0;
-    frame->id = frame->extended ? element[0] & 0x1FFFFFFFUL
-                                : (element[0] >> 18) & 0x7FFU;
-    frame->timestamp = (uint16_t)element[1];
-    const uint8_t dlc = (uint8_t)((element[1] >> 16) & 0xFU);
-    frame->data_length_code = dlc;
-    frame->bit_rate_switch = (element[1] & (1UL << 20)) != 0;
-    frame->fd_format = (element[1] & (1UL << 21)) != 0;
-    frame->filter_index = (uint8_t)((element[1] >> 24) & 0x7FU);
-    frame->accepted_non_matching = (element[1] & (1UL << 31)) != 0;
-    frame->data_length = frame->remote ? 0 : dlc_to_length(dlc);
-    frame->rx_fifo_message_lost = (fifo_status & TCAN_RXF0S_LOST) != 0;
-
-    for (uint8_t index = 0; index < frame->data_length; ++index) {
-        const size_t word_index = 2U + index / 4U;
-        frame->data[index] =
-            (uint8_t)(element[word_index] >> ((index % 4U) * 8U));
+    if (get_index >= TCAN_RX_FIFO_ELEMENTS ||
+        (fifo_status & TCAN_RXF0S_FILL_MASK) > TCAN_RX_FIFO_ELEMENTS) {
+        return ESP_ERR_INVALID_RESPONSE;
     }
-
-    ESP_RETURN_ON_ERROR(register_write(TCAN_REG_RXF0A, get_index), TAG,
-                        "Could not acknowledge RX message");
+    TCAN4x5x_MCAN_RX_Header header = {0};
+    uint8_t payload[64] = {0};
+    const uint8_t received =
+        TCAN4x5x_MCAN_ReadNextFIFO(RXFIFO0, &header, payload);
+    ESP_RETURN_ON_ERROR(tcan4550_spi_error(), TAG, "TI RX FIFO read failed");
+    memset(frame, 0, sizeof(*frame));
+    frame->id = header.ID;
+    frame->extended = header.XTD;
+    frame->remote = header.RTR;
+    frame->error_state_indicator = header.ESI;
+    frame->timestamp = header.RXTS;
+    frame->data_length_code = header.DLC;
+    frame->bit_rate_switch = header.BRS;
+    frame->fd_format = header.FDF;
+    frame->filter_index = header.FIDX;
+    frame->accepted_non_matching = header.ANMF;
+    frame->data_length = received;
+    frame->rx_fifo_message_lost = (fifo_status & TCAN_RXF0S_LOST) != 0;
+    memcpy(frame->data, payload, received);
     uint32_t clear_flags = TCAN_IR_RF0N;
     if ((fifo_status & TCAN_RXF0S_LOST) != 0) {
         clear_flags |= TCAN_IR_RF0L;
@@ -622,56 +546,10 @@ static esp_err_t receive_locked(tcan4550_frame_t* frame) {
     return ESP_OK;
 }
 
-esp_err_t tcan4550_init(const tcan4550_config_t* config) {
-    if (config == NULL || config->spi_clock_hz == 0 ||
-        config->spi_clock_hz > 18000000U ||
-        (config->oscillator_hz != 20000000U &&
-         config->oscillator_hz != 40000000U)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (s_tcan.state != TCAN_STATE_UNINITIALIZED) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    memset(&s_tcan, 0, sizeof(s_tcan));
-    s_tcan.config = *config;
-    ESP_RETURN_ON_ERROR(
-        calculate_nominal_timing(config->oscillator_hz, config->nominal_bitrate,
-                                 &s_tcan.nbtp),
-        TAG, "Cannot represent requested nominal CAN bitrate");
-    ESP_RETURN_ON_ERROR(
-        calculate_data_timing(config->oscillator_hz, config->data_bitrate,
-                              &s_tcan.dbtp, &s_tcan.tdcr),
-        TAG, "Cannot represent requested CAN-FD data bitrate");
-
-    spi_bus_config_t bus_config = {
-        .mosi_io_num = config->mosi_io,
-        .miso_io_num = config->miso_io,
-        .sclk_io_num = config->sclk_io,
-        .quadwp_io_num = GPIO_NUM_NC,
-        .quadhd_io_num = GPIO_NUM_NC,
-        .max_transfer_sz = sizeof(s_tcan.tx_buffer),
-    };
-    esp_err_t err =
-        spi_bus_initialize(config->spi_host, &bus_config, SPI_DMA_CH_AUTO);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        return err;
-    }
-
-    spi_device_interface_config_t device_config = {
-        .clock_speed_hz = (int)config->spi_clock_hz,
-        .mode = 0,
-        .spics_io_num = config->cs_io,
-        .queue_size = 1,
-    };
-    ESP_RETURN_ON_ERROR(
-        spi_bus_add_device(config->spi_host, &device_config, &s_tcan.spi), TAG,
-        "Could not add TCAN4550 to SPI bus");
-    s_tcan.mutex = xSemaphoreCreateMutex();
-    if (s_tcan.mutex == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-
+static esp_err_t initialize_device(void) {
+    /* Clear a stale transport fault before checking identity. */
+    TCAN4x5x_Device_ClearSPIERR();
+    ESP_RETURN_ON_ERROR(tcan4550_spi_error(), TAG, "TI SPI error clear failed");
     uint32_t id1 = 0;
     uint32_t id2 = 0;
     uint32_t revision = 0;
@@ -711,36 +589,104 @@ esp_err_t tcan4550_init(const tcan4550_config_t* config) {
         register_write(TCAN_REG_SPI_STATUS, TCAN_SPI_ERROR_W1C_MASK), TAG,
         "SPI error clear failed");
     ESP_RETURN_ON_ERROR(configure_device_mode(), TAG,
-                        "TCAN4550 could not enter normal mode");
+                        "TCAN4550 device configuration failed");
     ESP_RETURN_ON_ERROR(configure_mcan(), TAG, "M_CAN configuration failed");
+    ESP_RETURN_ON_ERROR(
+        ti_result(TCAN4x5x_Device_SetMode(TCAN4x5x_DEVICE_MODE_NORMAL)), TAG,
+        "TI normal device mode failed");
+    ESP_RETURN_ON_ERROR(
+        wait_for_register_bits(TCAN_REG_MODES, TCAN_MODES_MODE_MASK,
+                               TCAN_MODES_MODE_NORMAL, 100),
+        TAG, "Device did not enter normal mode");
 
     ESP_LOGI(TAG,
              "SPI verified: TCAN4550 revision=0x%08" PRIX32
-             " global_status=0x%02X",
-             revision, s_tcan.last_global_status);
+             " (TI library / ESP-IDF port)",
+             revision);
     ESP_LOGI(TAG,
              "CAN timing: oscillator=%" PRIu32 " Hz nominal=%" PRIu32
              " bit/s data=%" PRIu32 " bit/s NBTP=0x%08" PRIX32
              " DBTP=0x%08" PRIX32,
-             config->oscillator_hz, config->nominal_bitrate,
-             config->data_bitrate, s_tcan.nbtp, s_tcan.dbtp);
+             s_tcan.config.oscillator_hz, s_tcan.config.nominal_bitrate,
+             s_tcan.config.data_bitrate, s_tcan.nbtp, s_tcan.dbtp);
     return ESP_OK;
+}
+
+esp_err_t tcan4550_init(const tcan4550_config_t* config) {
+    if (config == NULL || config->spi_clock_hz == 0 ||
+        config->spi_clock_hz > 18000000U ||
+        (config->oscillator_hz != 20000000U &&
+         config->oscillator_hz != 40000000U) ||
+        config->nominal_bitrate == 0 || config->nominal_bitrate > 1000000U ||
+        config->data_bitrate < config->nominal_bitrate ||
+        config->data_bitrate > 8000000U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_tcan.state != TCAN_STATE_UNINITIALIZED) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    memset(&s_tcan, 0, sizeof(s_tcan));
+    s_tcan.config = *config;
+    ESP_RETURN_ON_ERROR(
+        calculate_nominal_timing(config->oscillator_hz, config->nominal_bitrate,
+                                 &s_tcan.nbtp),
+        TAG, "Invalid nominal timing");
+    ESP_RETURN_ON_ERROR(
+        calculate_data_timing(config->oscillator_hz, config->data_bitrate,
+                              &s_tcan.dbtp, &s_tcan.tdcr),
+        TAG, "Invalid data timing");
+    ESP_RETURN_ON_ERROR(tcan4550_spi_init(config), TAG,
+                        "SPI transport initialization failed");
+    esp_err_t err = tcan4550_ti_begin(1000);
+    if (err == ESP_OK) {
+        err = finish_session(initialize_device());
+    }
+    if (err != ESP_OK) {
+        /* Best effort standby using a fresh session, then release owned
+         * resources. */
+        if (tcan4550_ti_begin(100) == ESP_OK) {
+            (void)TCAN4x5x_Device_SetMode(TCAN4x5x_DEVICE_MODE_STANDBY);
+            (void)tcan4550_ti_end();
+        }
+        esp_err_t cleanup = tcan4550_spi_deinit();
+        s_tcan.state =
+            cleanup == ESP_OK ? TCAN_STATE_UNINITIALIZED : TCAN_STATE_FAULT;
+    }
+    return err;
+}
+
+esp_err_t tcan4550_deinit(void) {
+    if (s_tcan.state == TCAN_STATE_UNINITIALIZED) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_RETURN_ON_ERROR(tcan4550_ti_begin(1000), TAG,
+                        "Could not lock device for shutdown");
+    esp_err_t err =
+        ti_result(TCAN4x5x_Device_SetMode(TCAN4x5x_DEVICE_MODE_STANDBY));
+    err = finish_session(err);
+    if (err != ESP_OK) {
+        /* Retain access to the device so standby can be retried safely. */
+        s_tcan.state = TCAN_STATE_FAULT;
+        return err;
+    }
+    const esp_err_t cleanup = tcan4550_spi_deinit();
+    s_tcan.state =
+        cleanup == ESP_OK ? TCAN_STATE_UNINITIALIZED : TCAN_STATE_FAULT;
+    return cleanup != ESP_OK ? cleanup : err;
 }
 
 esp_err_t tcan4550_run_loopback_test(tcan4550_loopback_t loopback,
                                      uint32_t beacon_id) {
-    if (s_tcan.state == TCAN_STATE_UNINITIALIZED || beacon_id > 0x1FFFFFFFUL ||
-        (loopback != TCAN4550_LOOPBACK_INTERNAL &&
-         loopback != TCAN4550_LOOPBACK_EXTERNAL)) {
+    if (beacon_id > 0x1FFFFFFFUL || (loopback != TCAN4550_LOOPBACK_INTERNAL &&
+                                     loopback != TCAN4550_LOOPBACK_EXTERNAL)) {
         return ESP_ERR_INVALID_ARG;
     }
 
     const tcan_state_t state = loopback == TCAN4550_LOOPBACK_INTERNAL
                                    ? TCAN_STATE_INTERNAL_LOOPBACK
                                    : TCAN_STATE_EXTERNAL_LOOPBACK;
-    if (xSemaphoreTake(s_tcan.mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
+    ESP_RETURN_ON_ERROR(tcan4550_ti_begin(1000), TAG,
+                        "Could not lock TCAN4550");
 
     esp_err_t err = set_mcan_mode(state, false);
     tcan4550_frame_t sent = {
@@ -782,7 +728,7 @@ esp_err_t tcan4550_run_loopback_test(tcan4550_loopback_t loopback,
          memcmp(received.data, sent.data, sent.data_length) != 0)) {
         err = ESP_ERR_INVALID_RESPONSE;
     }
-    xSemaphoreGive(s_tcan.mutex);
+    err = finish_session(err);
 
     if (err == ESP_OK) {
         ESP_LOGI(
@@ -794,14 +740,10 @@ esp_err_t tcan4550_run_loopback_test(tcan4550_loopback_t loopback,
 }
 
 esp_err_t tcan4550_start(bool monitor_only) {
-    if (s_tcan.state == TCAN_STATE_UNINITIALIZED) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (xSemaphoreTake(s_tcan.mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-    const esp_err_t err = set_mcan_mode(TCAN_STATE_RUNNING, monitor_only);
-    xSemaphoreGive(s_tcan.mutex);
+    ESP_RETURN_ON_ERROR(tcan4550_ti_begin(1000), TAG,
+                        "Could not lock TCAN4550");
+    esp_err_t err = set_mcan_mode(TCAN_STATE_RUNNING, monitor_only);
+    err = finish_session(err);
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "CAN receiver started in %s mode",
                  monitor_only ? "passive monitor" : "normal");
@@ -811,41 +753,45 @@ esp_err_t tcan4550_start(bool monitor_only) {
 
 esp_err_t tcan4550_transmit(const tcan4550_frame_t* frame,
                             uint32_t timeout_ms) {
-    if (s_tcan.state == TCAN_STATE_UNINITIALIZED) {
-        return ESP_ERR_INVALID_STATE;
+    ESP_RETURN_ON_ERROR(tcan4550_ti_begin(timeout_ms), TAG,
+                        "Could not lock TCAN4550");
+    if (s_tcan.state == TCAN_STATE_FAULT ||
+        (s_tcan.state == TCAN_STATE_RUNNING && s_tcan.monitor_only)) {
+        return finish_session(ESP_ERR_INVALID_STATE);
     }
-    if (xSemaphoreTake(s_tcan.mutex, pdMS_TO_TICKS(timeout_ms + 100U)) !=
-        pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-    const esp_err_t err = transmit_locked(frame, timeout_ms);
-    xSemaphoreGive(s_tcan.mutex);
+    esp_err_t err = transmit_locked(frame, timeout_ms);
+    err = finish_session(err);
     return err;
 }
 
 esp_err_t tcan4550_receive(tcan4550_frame_t* frame, uint32_t timeout_ms) {
-    if (s_tcan.state == TCAN_STATE_UNINITIALIZED) {
-        return ESP_ERR_INVALID_STATE;
-    }
     if (frame == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
     const TickType_t start = xTaskGetTickCount();
-    const TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
+    const TickType_t timeout = timeout_ticks(timeout_ms);
     do {
-        if (xSemaphoreTake(s_tcan.mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-            return ESP_ERR_TIMEOUT;
+        const TickType_t elapsed = xTaskGetTickCount() - start;
+        const uint64_t remaining_ms =
+            elapsed >= timeout
+                ? 0
+                : (uint64_t)(timeout - elapsed) * 1000U / configTICK_RATE_HZ;
+        ESP_RETURN_ON_ERROR(
+            tcan4550_ti_begin(remaining_ms < 100 ? remaining_ms : 100), TAG,
+            "Could not lock TCAN4550");
+        if (s_tcan.state == TCAN_STATE_FAULT) {
+            return finish_session(ESP_ERR_INVALID_STATE);
         }
         esp_err_t err = receive_locked(frame);
-        xSemaphoreGive(s_tcan.mutex);
+        err = finish_session(err);
         if (err == ESP_OK) {
             return ESP_OK;
         }
         if (err != ESP_ERR_NOT_FOUND) {
             return err;
         }
-        if (timeout_ms == 0) {
+        if ((xTaskGetTickCount() - start) >= timeout) {
             break;
         }
         /*
@@ -859,12 +805,11 @@ esp_err_t tcan4550_receive(tcan4550_frame_t* frame, uint32_t timeout_ms) {
 }
 
 esp_err_t tcan4550_get_diagnostics(tcan4550_diagnostics_t* diagnostics) {
-    if (s_tcan.state == TCAN_STATE_UNINITIALIZED || diagnostics == NULL) {
-        return ESP_ERR_INVALID_STATE;
+    if (diagnostics == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
-    if (xSemaphoreTake(s_tcan.mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
+    ESP_RETURN_ON_ERROR(tcan4550_ti_begin(100), TAG, "Could not lock TCAN4550");
+    memset(diagnostics, 0, sizeof(*diagnostics));
 
     esp_err_t err =
         register_read(TCAN_REG_SPI_STATUS, &diagnostics->spi_status);
@@ -881,31 +826,21 @@ esp_err_t tcan4550_get_diagnostics(tcan4550_diagnostics_t* diagnostics) {
     if (err == ESP_OK) {
         err = register_read(TCAN_REG_ECR, &diagnostics->error_counters);
     }
-    xSemaphoreGive(s_tcan.mutex);
+    err = finish_session(err);
     return err;
 }
 
 esp_err_t tcan4550_clear_mcan_interrupts(uint32_t flags) {
-    if (s_tcan.state == TCAN_STATE_UNINITIALIZED) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (xSemaphoreTake(s_tcan.mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-    const esp_err_t err = register_write(TCAN_REG_IR, flags);
-    xSemaphoreGive(s_tcan.mutex);
+    ESP_RETURN_ON_ERROR(tcan4550_ti_begin(100), TAG, "Could not lock TCAN4550");
+    esp_err_t err = register_write(TCAN_REG_IR, flags);
+    err = finish_session(err);
     return err;
 }
 
 esp_err_t tcan4550_clear_device_interrupts(uint32_t flags) {
-    if (s_tcan.state == TCAN_STATE_UNINITIALIZED) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (xSemaphoreTake(s_tcan.mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-    const esp_err_t err =
+    ESP_RETURN_ON_ERROR(tcan4550_ti_begin(100), TAG, "Could not lock TCAN4550");
+    esp_err_t err =
         register_write(TCAN_REG_DEVICE_IR, flags & TCAN_DEVICE_IR_W1C_MASK);
-    xSemaphoreGive(s_tcan.mutex);
+    err = finish_session(err);
     return err;
 }
