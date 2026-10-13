@@ -17,6 +17,7 @@ idf_build_set_property(MINIMAL_BUILD ON)
 # ---- Web UI (Vite) build integration ----
 option(VE_BUILD_WEB "Build Vite UI before compiling firmware" ON)
 set(VE_RECOVERY_HTML "" CACHE FILEPATH "Path to a prebuilt recovery HTML file")
+set(VE_RECOVERY_CONFIG_HEADER "" CACHE FILEPATH "Parent-project recovery configuration header")
 
 get_filename_component(VE_REPO_ROOT "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
 set(VE_NODE_ROOT_DIR "${VE_REPO_ROOT}")

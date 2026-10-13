@@ -21,6 +21,18 @@ idf_component_register(
     REQUIRES esp_wifi esp_netif esp_event nvs_flash esp_http_server app_update esp_partition
 )
 
+if(VE_RECOVERY_CONFIG_HEADER)
+  if(NOT EXISTS "${VE_RECOVERY_CONFIG_HEADER}")
+    message(FATAL_ERROR
+      "VE_RECOVERY_CONFIG_HEADER points to '${VE_RECOVERY_CONFIG_HEADER}', but that file does not exist."
+    )
+  endif()
+
+  get_filename_component(ve_recovery_config_dir "${VE_RECOVERY_CONFIG_HEADER}" DIRECTORY)
+  target_include_directories(${COMPONENT_LIB} PRIVATE "${ve_recovery_config_dir}")
+  target_compile_definitions(${COMPONENT_LIB} PRIVATE VE_RECOVERY_USE_PARENT_CONFIG=1)
+endif()
+
 if(TARGET ve_web)
   add_dependencies(${COMPONENT_LIB} ve_web)
 endif()
