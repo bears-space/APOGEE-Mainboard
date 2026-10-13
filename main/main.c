@@ -5,7 +5,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "status_led.h"
-#include "tcan337.h"
 #include "tcan4550.h"
 #include "vigilant.h"
 
@@ -15,27 +14,16 @@
 #define TCAN4550_SCLK_IO GPIO_NUM_12
 #define TCAN4550_MISO_IO GPIO_NUM_13
 
-/* TCAN337 uses the ESP32-S3's integrated Classic CAN/TWAI controller. */
-#define TCAN337_RX_IO GPIO_NUM_15
-#define TCAN337_TX_IO GPIO_NUM_16
-#define TCAN337_FAULT_IO GPIO_NUM_NC
-#define TCAN337_SILENT_IO GPIO_NUM_NC
-
 /*
  * This is the CAN identifier used by both loopback verification frames.
  * 0x000..0x7FF selects an 11-bit ID; a larger value selects a 29-bit ID.
  */
 #define TCAN4550_BEACON_ADDRESS 0x123U
 
-/* Independent self-test identifier for the TCAN337/TWAI interface. */
-#define TCAN337_BEACON_ADDRESS 0x321U
-
 /* Change this to 20000000 if the board uses a 20 MHz crystal/clock. */
 #define TCAN4550_OSCILLATOR_HZ 40000000U
 #define TCAN4550_NOMINAL_BITRATE 500000U
 #define TCAN4550_DATA_BITRATE 2000000U
-#define TCAN337_BITRATE 500000U
-#define TCAN337_HEALTH_REPORT_INTERVAL_MS 10000U
 
 /* External loopback exercises the transceiver and CANH/CANL path. */
 #define TCAN4550_RUN_EXTERNAL_LOOPBACK_TEST 1
@@ -48,243 +36,6 @@
 #define TCAN_DEVICE_IR_CAN_SILENT (1UL << 10)
 
 static const char* TAG = "app_main";
-
-static const char* tcan337_bus_state_name(tcan337_bus_state_t state) {
-    switch (state) {
-        case TCAN337_ERROR_WARNING:
-            return "warning";
-        case TCAN337_ERROR_PASSIVE:
-            return "passive";
-        case TCAN337_BUS_OFF:
-            return "bus-off";
-        case TCAN337_ERROR_ACTIVE:
-        default:
-            return "active";
-    }
-}
-
-static void format_tcan337_errors(uint32_t flags, char* output,
-                                  size_t output_size) {
-    static const struct {
-        uint32_t flag;
-        const char* name;
-    } error_names[] = {
-        {TCAN337_ERROR_ARBITRATION_LOST, "arbitration-lost"},
-        {TCAN337_ERROR_BIT, "bit"},
-        {TCAN337_ERROR_FORM, "form"},
-        {TCAN337_ERROR_STUFF, "stuff"},
-        {TCAN337_ERROR_ACK, "ack"},
-    };
-
-    if (output_size == 0) {
-        return;
-    }
-    if (flags == 0) {
-        (void)snprintf(output, output_size, "none");
-        return;
-    }
-
-    size_t offset = 0;
-    uint32_t recognized = 0;
-    for (size_t index = 0; index < sizeof(error_names) / sizeof(error_names[0]);
-         ++index) {
-        if ((flags & error_names[index].flag) == 0) {
-            continue;
-        }
-        recognized |= error_names[index].flag;
-        const int written =
-            snprintf(&output[offset], output_size - offset, "%s%s",
-                     offset == 0 ? "" : "|", error_names[index].name);
-        if (written < 0 || (size_t)written >= output_size - offset) {
-            output[output_size - 1] = '\0';
-            return;
-        }
-        offset += (size_t)written;
-    }
-
-    const uint32_t unknown = flags & ~recognized;
-    if (unknown != 0 && offset < output_size) {
-        (void)snprintf(&output[offset], output_size - offset,
-                       "%sunknown-0x%02" PRIX32, offset == 0 ? "" : "|",
-                       unknown);
-    }
-}
-
-static void log_tcan337_frame(const tcan337_frame_t* frame, uint32_t sequence) {
-    char payload[8U * 3U + 1U] = {0};
-    size_t offset = 0;
-    for (uint8_t index = 0; index < frame->data_length; ++index) {
-        const int written =
-            snprintf(&payload[offset], sizeof(payload) - offset, "%s%02X",
-                     index == 0 ? "" : " ", frame->data[index]);
-        if (written < 0 || (size_t)written >= sizeof(payload) - offset) {
-            break;
-        }
-        offset += (size_t)written;
-    }
-
-    ESP_LOGI("can_rx",
-             "TCAN337 #%06" PRIu32 " ID=0x%08" PRIX32
-             " %s CAN%s len=%u timestamp=%" PRIu64 " us data=[%s]",
-             sequence, frame->id, frame->extended ? "EXT" : "STD",
-             frame->remote ? " RTR" : "", frame->data_length,
-             frame->timestamp_us, payload);
-}
-
-static void log_tcan337_health(void) {
-    static uint32_t previous_bus_errors = 0;
-    static uint32_t previous_dropped_frames = 0;
-    static uint32_t previous_failed_transmissions = 0;
-    static tcan337_bus_state_t previous_state = TCAN337_ERROR_ACTIVE;
-    static bool previous_transceiver_fault = false;
-    static bool diagnostics_initialized = false;
-    static bool controller_issue_reported = false;
-    static bool malformed_bus_explained = false;
-    static bool recovery_requested = false;
-    static TickType_t last_report_tick = 0;
-
-    tcan337_diagnostics_t diagnostics = {0};
-    esp_err_t err = tcan337_get_diagnostics(&diagnostics);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Could not read TCAN337/TWAI diagnostics: %s",
-                 esp_err_to_name(err));
-        return;
-    }
-
-    const bool bus_error_increased =
-        diagnostics.bus_error_count != previous_bus_errors;
-    const bool controller_issue =
-        diagnostics.last_error_flags != 0 || bus_error_increased;
-    const bool state_changed =
-        diagnostics_initialized && diagnostics.state != previous_state;
-    const bool transceiver_fault_changed =
-        diagnostics_initialized &&
-        diagnostics.transceiver_fault != previous_transceiver_fault;
-    const bool dropped_frames_changed =
-        diagnostics.dropped_frames != previous_dropped_frames;
-    const bool failed_transmissions_changed =
-        diagnostics.failed_transmissions != previous_failed_transmissions;
-    const bool first_controller_issue =
-        controller_issue && !controller_issue_reported;
-    const bool first_transceiver_fault =
-        diagnostics.transceiver_fault && !diagnostics_initialized;
-    const bool persistent_issue = controller_issue ||
-                                  diagnostics.state != TCAN337_ERROR_ACTIVE ||
-                                  diagnostics.transceiver_fault;
-    const TickType_t now = xTaskGetTickCount();
-    const bool periodic_report_due =
-        persistent_issue &&
-        now - last_report_tick >=
-            pdMS_TO_TICKS(TCAN337_HEALTH_REPORT_INTERVAL_MS);
-    const bool report = first_controller_issue || first_transceiver_fault ||
-                        state_changed || transceiver_fault_changed ||
-                        dropped_frames_changed ||
-                        failed_transmissions_changed || periodic_report_due;
-
-    if (report) {
-        char error_names[64] = {0};
-        format_tcan337_errors(diagnostics.last_error_flags, error_names,
-                              sizeof(error_names));
-        ESP_LOGW("can_health",
-                 "TCAN337 state=%s TEC=%u REC=%u bus_err=%" PRIu32
-                 " error=0x%02" PRIX32 " (%s) rx=%" PRIu32 " dropped=%" PRIu32
-                 " tx=%" PRIu32 " tx_failed=%" PRIu32 "%s",
-                 tcan337_bus_state_name(diagnostics.state),
-                 diagnostics.tx_error_count, diagnostics.rx_error_count,
-                 diagnostics.bus_error_count, diagnostics.last_error_flags,
-                 error_names, diagnostics.received_frames,
-                 diagnostics.dropped_frames, diagnostics.transmitted_frames,
-                 diagnostics.failed_transmissions,
-                 diagnostics.transceiver_fault ? " FAULT=ACTIVE" : "");
-        last_report_tick = now;
-    }
-
-    if (!malformed_bus_explained &&
-        (diagnostics.last_error_flags &
-         (TCAN337_ERROR_BIT | TCAN337_ERROR_FORM | TCAN337_ERROR_STUFF)) != 0) {
-        ESP_LOGW("can_health",
-                 "TCAN337 RXD is seeing malformed CAN bits. With no peer, "
-                 "check CANH/CANL termination, common ground, transceiver "
-                 "power, and that S is held low.");
-        malformed_bus_explained = true;
-    }
-
-    if (diagnostics.state == TCAN337_BUS_OFF && !recovery_requested) {
-        err = tcan337_recover();
-        if (err == ESP_OK) {
-            ESP_LOGW("can_health", "TCAN337 bus-off recovery started");
-            recovery_requested = true;
-        } else {
-            ESP_LOGE(TAG, "Could not start TCAN337 recovery: %s",
-                     esp_err_to_name(err));
-        }
-    } else if (diagnostics.state == TCAN337_ERROR_ACTIVE) {
-        recovery_requested = false;
-    }
-
-    previous_bus_errors = diagnostics.bus_error_count;
-    previous_dropped_frames = diagnostics.dropped_frames;
-    previous_failed_transmissions = diagnostics.failed_transmissions;
-    previous_state = diagnostics.state;
-    previous_transceiver_fault = diagnostics.transceiver_fault;
-    diagnostics_initialized = true;
-    controller_issue_reported |= controller_issue;
-}
-
-static void tcan337_logger_task(void* argument) {
-    (void)argument;
-    uint32_t received_count = 0;
-
-    while (true) {
-        tcan337_frame_t frame = {0};
-        const esp_err_t err = tcan337_receive(&frame, 1000);
-        if (err == ESP_OK) {
-            log_tcan337_frame(&frame, ++received_count);
-        } else if (err != ESP_ERR_TIMEOUT) {
-            ESP_LOGE(TAG, "TCAN337 receive failed: %s", esp_err_to_name(err));
-            vTaskDelay(pdMS_TO_TICKS(100));
-        }
-        log_tcan337_health();
-    }
-}
-
-static void start_tcan337_verification(void) {
-    const tcan337_config_t config = {
-        .tx_io = TCAN337_TX_IO,
-        .rx_io = TCAN337_RX_IO,
-        .fault_io = TCAN337_FAULT_IO,
-        .silent_io = TCAN337_SILENT_IO,
-        .bitrate = TCAN337_BITRATE,
-    };
-
-    esp_err_t err = tcan337_init(&config);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "TCAN337/TWAI initialization FAILED: %s",
-                 esp_err_to_name(err));
-        return;
-    }
-
-    err = tcan337_run_loopback_test(TCAN337_BEACON_ADDRESS);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG,
-                 "TCAN337 self-reception FAILED (%s). Check TXD/RXD, S=low, "
-                 "CANH/CANL, power, and termination.",
-                 esp_err_to_name(err));
-    }
-
-    err = tcan337_start(false);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Could not start TCAN337 receiver: %s",
-                 esp_err_to_name(err));
-        return;
-    }
-
-    const BaseType_t task_created =
-        xTaskCreate(tcan337_logger_task, "tcan337_logger", 4096, NULL, 5, NULL);
-    if (task_created != pdPASS) {
-        ESP_LOGE(TAG, "Could not create TCAN337 logging task");
-    }
-}
 
 static void log_can_frame(const tcan4550_frame_t* frame, uint32_t sequence) {
     char payload[64U * 3U + 1U] = {0};
@@ -443,5 +194,4 @@ void app_main(void) {
                                .network_mode = NW_MODE_APSTA};
     ESP_ERROR_CHECK(vigilant_init(VgConfig));
     start_tcan4550_verification();
-    start_tcan337_verification();
 }
