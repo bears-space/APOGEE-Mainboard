@@ -133,9 +133,9 @@ static esp_err_t wait_for_register_bits(uint16_t address, uint32_t mask,
                                         uint32_t timeout_ms) {
     const TickType_t start = xTaskGetTickCount();
     const TickType_t timeout = timeout_ticks(timeout_ms);
+    uint32_t value = 0;
 
     do {
-        uint32_t value = 0;
         ESP_RETURN_ON_ERROR(register_read(address, &value), TAG,
                             "Failed to read register 0x%04X", address);
         if ((value & mask) == expected) {
@@ -147,6 +147,10 @@ static esp_err_t wait_for_register_bits(uint16_t address, uint32_t mask,
         vTaskDelay(1);
     } while ((xTaskGetTickCount() - start) <= timeout);
 
+    ESP_LOGE(TAG,
+             "Register 0x%04X timeout: value=0x%08" PRIX32
+             " mask=0x%08" PRIX32 " expected=0x%08" PRIX32,
+             address, value, mask, expected);
     return ESP_ERR_TIMEOUT;
 }
 
@@ -312,6 +316,16 @@ static esp_err_t configure_mcan(void) {
     ESP_RETURN_ON_ERROR(register_write(TCAN_REG_TEST, 0), TAG,
                         "M_CAN test mode clear failed");
 
+    /* Standby holds M_CAN in clock stop. Enter normal device mode only
+     * after timing/RAM and MON are configured, before waiting for INIT=0.
+     * The device mode transition itself also requests INIT=0. */
+    ESP_RETURN_ON_ERROR(
+        ti_result(TCAN4x5x_Device_SetMode(TCAN4x5x_DEVICE_MODE_NORMAL)), TAG,
+        "TI normal device mode failed");
+    ESP_RETURN_ON_ERROR(
+        wait_for_register_bits(TCAN_REG_MODES, TCAN_MODES_MODE_MASK,
+                               TCAN_MODES_MODE_NORMAL, 100),
+        TAG, "Device did not enter normal mode");
     ESP_RETURN_ON_ERROR(mcan_leave_initialization(
                             TCAN_CCCR_FDOE | TCAN_CCCR_BRSE | TCAN_CCCR_MON),
                         TAG, "Could not start configured M_CAN");
@@ -591,13 +605,6 @@ static esp_err_t initialize_device(void) {
     ESP_RETURN_ON_ERROR(configure_device_mode(), TAG,
                         "TCAN4550 device configuration failed");
     ESP_RETURN_ON_ERROR(configure_mcan(), TAG, "M_CAN configuration failed");
-    ESP_RETURN_ON_ERROR(
-        ti_result(TCAN4x5x_Device_SetMode(TCAN4x5x_DEVICE_MODE_NORMAL)), TAG,
-        "TI normal device mode failed");
-    ESP_RETURN_ON_ERROR(
-        wait_for_register_bits(TCAN_REG_MODES, TCAN_MODES_MODE_MASK,
-                               TCAN_MODES_MODE_NORMAL, 100),
-        TAG, "Device did not enter normal mode");
 
     ESP_LOGI(TAG,
              "SPI verified: TCAN4550 revision=0x%08" PRIX32
