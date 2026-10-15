@@ -3,7 +3,7 @@
 # SPDX-AI-Model: gpt-6
 # SPDX-AI-Provider: OpenAI
 # SPDX-AI-Scope: ESP-IDF wrapper implementation, TI integration, and correctness fixes.
-# SPDX-AI-Date: 2026-10-13
+# SPDX-AI-Date: 2026-10-15
 */
 
 #include "tcan4550.h"
@@ -516,7 +516,12 @@ static esp_err_t transmit_locked(const tcan4550_frame_t* frame,
         s_tcan.state = TCAN_STATE_FAULT;
         return cancelled;
     }
-    return ESP_ERR_TIMEOUT;
+    /* Cancellation cannot stop a frame that has already completed on the
+     * bus. Check the final result after the pending bit clears. */
+    uint32_t transmitted = 0;
+    ESP_RETURN_ON_ERROR(register_read(TCAN_REG_TXBTO, &transmitted), TAG,
+                        "Could not read final TX completion");
+    return (transmitted & TCAN_TX_BUFFER_0) != 0 ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 static esp_err_t receive_locked(tcan4550_frame_t* frame) {

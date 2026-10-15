@@ -3,7 +3,7 @@
 # SPDX-AI-Model: gpt-6
 # SPDX-AI-Provider: OpenAI
 # SPDX-AI-Scope: SPI-device mock and regression tests; tests are AI-generated.
-# SPDX-AI-Date: 2026-10-13
+# SPDX-AI-Date: 2026-10-15
 */
 
 #include <assert.h>
@@ -19,7 +19,7 @@ static uint32_t regs[0x8800U / 4U];
 static unsigned heap_live, mutex_live, device_live, bus_live, transfers,
     acknowledgements;
 static int fail_address = -1, spi_error_address = -1, alloc_fail_after = -1;
-static bool complete_tx = true, borrowed_bus;
+static bool complete_tx = true, complete_on_cancel, borrowed_bus;
 static uintptr_t current_task = 1;
 static TickType_t ticks;
 struct mock_mutex {
@@ -154,6 +154,10 @@ esp_err_t spi_device_polling_transmit(spi_device_handle_t d,
                     }
                 }
             } else if (addr == REG_MCAN_TXBCR) {
+                if (complete_on_cancel) {
+                    regs[REG_MCAN_TXBTO / 4] |=
+                        regs[REG_MCAN_TXBRP / 4] & word;
+                }
                 regs[REG_MCAN_TXBRP / 4] &= ~word;
             } else if (addr == REG_MCAN_CCCR) {
                 /* Standby holds M_CAN in initialization/clock stop, even
@@ -289,6 +293,11 @@ int main(void) {
     complete_tx = false;
     assert(tcan4550_transmit(&frame, 10) == ESP_ERR_TIMEOUT);
     assert(regs[REG_MCAN_TXBRP / 4] == 0);
+    /* A frame already on the bus can finish successfully while the host
+     * requests cancellation. Report the actual hardware result. */
+    complete_on_cancel = true;
+    assert(tcan4550_transmit(&frame, 10) == ESP_OK);
+    complete_on_cancel = false;
     complete_tx = true;
     assert(tcan4550_start(true) == ESP_OK);
     assert(tcan4550_transmit(&frame, 100) == ESP_ERR_INVALID_STATE);

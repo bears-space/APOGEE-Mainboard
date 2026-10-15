@@ -2,28 +2,32 @@
 # SPDX-AI-Disclosure: ai-assisted
 # SPDX-AI-Model: gpt-6
 # SPDX-AI-Provider: OpenAI
-# SPDX-AI-Scope: External-loopback default, comments, and diagnostic message changes.
-# SPDX-AI-Date: 2026-10-13
+# SPDX-AI-Scope: CAN verification, diagnostics, and online beacon.
+# SPDX-AI-Date: 2026-10-15
 */
 
 #include <inttypes.h>
 #include <stdio.h>
 
 #include "esp_log.h"
+#include "esp_mac.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "status_led.h"
 #include "tcan4550.h"
 #include "vigilant.h"
 
-/* Hardware connections supplied for the ESP32-S3. */
+
+/* ESP32-S3 GPIO numbers, not package pin numbers. */
 #define TCAN4550_CS_IO GPIO_NUM_10
 #define TCAN4550_MOSI_IO GPIO_NUM_11
 #define TCAN4550_SCLK_IO GPIO_NUM_12
 #define TCAN4550_MISO_IO GPIO_NUM_13
 
+
 /*
- * This is the CAN identifier used by both loopback verification frames.
+ * CAN identifier used by loopback verification and the online beacon.
  * 0x000..0x7FF selects an 11-bit ID; a larger value selects a 29-bit ID.
  */
 #define TCAN4550_BEACON_ADDRESS 0x123U
@@ -32,6 +36,11 @@
 #define TCAN4550_OSCILLATOR_HZ 40000000U
 #define TCAN4550_NOMINAL_BITRATE 500000U
 #define TCAN4550_DATA_BITRATE 2000000U
+#define TCAN4550_ONLINE_INTERVAL_MS 1000U
+
+/* Provisional event layout; see docs/peripherals.md for the wire format. */
+#define CAN_PACKET_TYPE_EVENT 0x3U
+#define CAN_EVENT_ONLINE 0x01U
 
 /* External loopback emits a frame onto CANH/CANL. Enable only on a test bus.
  * Its internally fed-back reception does not verify the physical RX path. */
@@ -106,10 +115,17 @@ static void log_can_health(void) {
         ESP_LOGW("can_health",
                  "SPI=0x%08" PRIX32 " DEV_IR=0x%08" PRIX32
                  " MCAN_IR=0x%08" PRIX32 " PSR=0x%08" PRIX32
-                 " ECR=0x%08" PRIX32,
+                 " ECR=0x%08" PRIX32
+                 " TEC=%u REC=%u EP=%u EW=%u BO=%u LEC=%u DLEC=%u",
                  diagnostics.spi_status, diagnostics.device_interrupts,
                  diagnostics.mcan_interrupts, diagnostics.protocol_status,
-                 diagnostics.error_counters);
+                 diagnostics.error_counters,
+                 (unsigned int)(diagnostics.error_counters & 0xFFU),
+                 (unsigned int)((diagnostics.error_counters >> 8) & 0x7FU),
+                 (unsigned int)((diagnostics.protocol_status >> 5) & 1U),
+                 (unsigned int)((diagnostics.protocol_status >> 6) & 1U),
+                 (unsigned int)((diagnostics.protocol_status >> 7) & 1U),
+                 (unsigned int)last_error, (unsigned int)data_last_error);
     }
 
     if (diagnostics.mcan_interrupts != 0) {
@@ -128,13 +144,65 @@ static void log_can_health(void) {
     }
 }
 
+static void send_can_online(const uint8_t mac[6]) {
+    const uint32_t uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    const tcan4550_frame_t frame = {
+        .id = TCAN4550_BEACON_ADDRESS,
+        .extended = TCAN4550_BEACON_ADDRESS > 0x7FFU,
+        .fd_format = true,
+        .bit_rate_switch = true,
+        .data_length = 12,
+        .data =
+            {
+                CAN_PACKET_TYPE_EVENT << 4,
+                (uint8_t)(uptime_ms >> 24),
+                (uint8_t)(uptime_ms >> 16),
+                (uint8_t)(uptime_ms >> 8),
+                (uint8_t)uptime_ms,
+                CAN_EVENT_ONLINE,
+                mac[0],
+                mac[1],
+                mac[2],
+                mac[3],
+                mac[4],
+                mac[5],
+            },
+    };
+    const esp_err_t err = tcan4550_transmit(&frame, 100);
+    if (err == ESP_OK) {
+        ESP_LOGI("can_tx",
+                 "TX confirmed ID=0x%08" PRIX32
+                 " online MAC=" MACSTR " uptime_ms=%" PRIu32,
+                 frame.id, MAC2STR(mac), uptime_ms);
+    } else {
+        ESP_LOGW("can_tx", "Online beacon TX not confirmed: %s",
+                 esp_err_to_name(err));
+    }
+}
+
 static void can_logger_task(void* argument) {
     (void)argument;
     uint32_t received_count = 0;
+    uint8_t mac[6] = {0};
+    const esp_err_t mac_err = esp_read_mac(mac, ESP_MAC_BASE);
+    if (mac_err != ESP_OK) {
+        ESP_LOGE(TAG, "Online beacon disabled: could not read base MAC: %s",
+                 esp_err_to_name(mac_err));
+    }
+    const TickType_t online_interval =
+        pdMS_TO_TICKS(TCAN4550_ONLINE_INTERVAL_MS);
+    TickType_t last_online = xTaskGetTickCount() - online_interval;
 
     while (true) {
+        const TickType_t now = xTaskGetTickCount();
+        if (mac_err == ESP_OK &&
+            (TickType_t)(now - last_online) >= online_interval) {
+            last_online = now;
+            send_can_online(mac);
+        }
+
         tcan4550_frame_t frame = {0};
-        esp_err_t err = tcan4550_receive(&frame, 1000);
+        esp_err_t err = tcan4550_receive(&frame, 100);
         if (err == ESP_OK) {
             log_can_frame(&frame, ++received_count);
         } else if (err != ESP_ERR_TIMEOUT) {

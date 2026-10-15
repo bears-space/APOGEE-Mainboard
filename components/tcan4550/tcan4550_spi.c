@@ -2,15 +2,17 @@
 # SPDX-AI-Disclosure: ai-generated
 # SPDX-AI-Model: gpt-6
 # SPDX-AI-Provider: OpenAI
-# SPDX-AI-Scope: ESP-IDF SPI transport implementation.
-# SPDX-AI-Date: 2026-10-13
+# SPDX-AI-Scope: ESP-IDF SPI transport implementation and failure diagnostics.
+# SPDX-AI-Date: 2026-10-15
 */
 
 #include "tcan4550_spi.h"
 
+#include <inttypes.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -212,6 +214,13 @@ static void transfer(void) {
             fail(err);
         } else if ((s_spi.rx[0] & 8U) != 0 || (s_spi.status_rx[0] & 8U) != 0 ||
                    (decode(s_spi.status_rx + 4) & SPI_ERROR_MASK) != 0) {
+            ESP_LOGE("tcan4550_spi",
+                     "SPI response rejected: op=0x%02X addr=0x%04X "
+                     "header=0x%08" PRIX32 " data=0x%08" PRIX32
+                     " status_header=0x%08" PRIX32 " status=0x%08" PRIX32,
+                     s_spi.tx[0], address, decode(s_spi.rx),
+                     decode(s_spi.rx + 4), decode(s_spi.status_rx),
+                     decode(s_spi.status_rx + 4));
             fail(ESP_ERR_INVALID_RESPONSE);
         }
     }
