@@ -37,7 +37,7 @@ and generated documentation were excluded. Original CRLF line endings were
 normalized to LF and trailing whitespace removed. The upstream file hashes and local changes are recorded in
 [ti/UPSTREAM.md](ti/UPSTREAM.md).
 
-## Current example
+## Application setup
 
 The existing GPIO assignments in `main/main.c` are preserved:
 
@@ -48,17 +48,17 @@ The existing GPIO assignments in `main/main.c` are preserved:
 | SCLK | 12 |
 | SDO/MISO | 13 |
 
-The example uses SPI2, SPI mode 0 at 2 MHz, a 40 MHz oscillator, 500 kbit/s
+The application uses SPI2, SPI mode 0 at 2 MHz, a 40 MHz oscillator, 500 kbit/s
 arbitration, and 2 Mbit/s data. Set the oscillator to match the actual hardware.
 GPIOs are passed in `tcan4550_config_t`, so the port can be reused on other
 ESP-IDF targets. The checked-in `sdkconfig` selects ESP32-C6; select the actual
 board's target before flashing. No reset or interrupt GPIO is assumed.
 
 `tcan4550_init()` verifies identity and scratch-register access, initializes
-ECC-protected RAM, and starts passive monitoring. The application runs internal
-loopback, then explicitly starts normal operation with `tcan4550_start(false)`.
-External loopback is disabled by default: it sends a frame onto the bus and
-internally feeds TX back to RX, so it cannot prove the physical receive path.
+ECC-protected RAM, and starts passive monitoring. The application then starts
+normal operation with `tcan4550_start(false)`.
+It does not run loopback tests or send example frames. Add application-specific
+transmit and receive handling using `tcan4550_transmit()` and `tcan4550_receive()`.
 
 ## Direct TI API access
 
@@ -111,16 +111,16 @@ A failed mode transition or wrapper transport failure blocks subsequent wrapper
 TX/RX until recovery. Read diagnostics, clear the hardware cause, then call
 `tcan4550_start()` or deinitialize/reinitialize as appropriate. SPI faults can
 be cleared using `TCAN4x5x_Device_ClearSPIERR()` in a fresh TI session. Bus-off
-recovery requires an explicit restart; the example does not automatically decide
-when it is safe to rejoin the bus.
+recovery requires an explicit restart; the application does not automatically
+decide when it is safe to rejoin the bus.
 
 TX timeout requests cancellation and checks pending status for up to another
 100 ms. A frame already in progress may complete despite cancellation. Passive
 monitor mode rejects wrapper transmission requests.
 
 The FIFO holds 16 frames and uses blocking mode to prevent an element from being
-overwritten during separate SPI header/payload reads. Serial logging and polling
-can still lose frames under load; this example is not a lossless CAN recorder.
+overwritten during separate SPI header/payload reads. The application must drain
+the FIFO regularly with `tcan4550_receive()` to avoid losing frames under load.
 
 ## Validation
 
